@@ -227,11 +227,10 @@ spec:
     spec:
       initContainers:
       - name: install-oss-server
-        image: harbor-dev.yun-paas.com/csi_agent/oss-server:v1.0.3
+        image: harbor-dev.yun-paas.com/csi_agent/oss-server:v1.0.4
         imagePullPolicy: Always
         command: 
         - /bin/sh
-        - -c
         - /install-oss.sh
         securityContext:
           privileged: true

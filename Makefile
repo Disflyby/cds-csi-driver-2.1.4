@@ -3,7 +3,7 @@ HARBOR_REPOSITORY?=harbor-dev.yun-paas.com/csi_agent
 IMAGE?=$(HARBOR_REPOSITORY)/cds-csi-driver
 OSS_SERVER_IMAGE?=$(HARBOR_REPOSITORY)/oss-server
 VERSION?=v2.1.5
-OSS_SERVER_VERSION?=v1.0.3
+OSS_SERVER_VERSION?=v1.0.4
 GIT_COMMIT?=$(shell git rev-parse HEAD)
 BUILD_DATE?=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS?="-X ${PKG}/pkg/common.version=${VERSION} -X ${PKG}/pkg/common.gitCommit=${GIT_COMMIT} -X ${PKG}/pkg/common.buildDate=${BUILD_DATE} -s -w"

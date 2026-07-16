@@ -7,7 +7,7 @@ images:
   newTag: v2.1.5
 - name: registry-bj.capitalonline.net/cck/oss-server
   newName: harbor-dev.yun-paas.com/csi_agent/oss-server
-  newTag: v1.0.3
+  newTag: v1.0.4
 - name: registry-bj.capitalonline.net/cck/csi-provisioner
   newName: harbor-dev.yun-paas.com/csi_agent/csi-provisioner
   newTag: v1.5.0
