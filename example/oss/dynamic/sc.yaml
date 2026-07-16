@@ -10,5 +10,7 @@ parameters:
   path: "/kubernetes"
   csi.storage.k8s.io/provisioner-secret-name: oss-csi-credentials
   csi.storage.k8s.io/provisioner-secret-namespace: default
+  csi.storage.k8s.io/deletion-secret-name: oss-csi-credentials
+  csi.storage.k8s.io/deletion-secret-namespace: default
   csi.storage.k8s.io/node-publish-secret-name: oss-csi-credentials
   csi.storage.k8s.io/node-publish-secret-namespace: default

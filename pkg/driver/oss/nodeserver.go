@@ -4,14 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+
 	"github.com/capitalonline/cds-csi-driver/pkg/driver/utils"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/kubernetes-csi/drivers/pkg/csi-common"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/klog"
-	"strings"
 )
 
 func NewNodeServer(d *OssDriver) *NodeServer {
@@ -24,6 +24,9 @@ func (n *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 	log.Infof("NodePublishVolume:: starting mount oss volume %s at %s", req.GetVolumeId(), req.GetTargetPath())
 	opts := &PublishOptions{}
 	opts.NodePublishPath = req.GetTargetPath()
+	if req.GetVolumeId() == "" {
+		return nil, status.Error(codes.InvalidArgument, "OSS volume ID is required")
+	}
 	if opts.NodePublishPath == "" {
 		log.Errorf("oss mountPath is necessary but input empty")
 		utils.SentrySendError(fmt.Errorf("oss mountPath is necessary but input empty"))
@@ -63,56 +66,52 @@ func (n *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 		return nil, errors.New("oss credentials are required")
 	}
 
-	// directly return if the target mountPath has been mounted
-	cmdMnt := fmt.Sprintf("mount | grep %s | grep -v grep", opts.NodePublishPath)
-	if err := utils.RunSYSCommand(cmdMnt); err != nil {
-		klog.Errorf("failed to run sys command: %+v", err)
-	} else {
+	mounted, err := utils.IsSystemMountPoint(opts.NodePublishPath)
+	if err != nil {
+		return nil, fmt.Errorf("check OSS mount point: %w", err)
+	}
+	if mounted {
 		log.Debugf("NodePublishVolume:: oss, mountPath: %s is mounted", opts.NodePublishPath)
 		return &csi.NodePublishVolumeResponse{}, nil
 	}
 
-	// Save ak file for s3fs in default
-	opts.AuthType = AuthTypeDefault
-	// save AK and AKS
-	if opts.AuthType == "saveAkFile" {
-		// save ak file: bucket:ak_id:ak_secret to /etc/s3pass
-		if err := opts.saveOssCredential(LocalCredentialFile); err != nil {
-			log.Debugf("save ak file: bucket:ak_id:ak_secret failed")
-			return nil, err
-		}
-	} else {
-		log.Errorf("AuthType verify error, AuthType is only support %s", AuthTypeDefault)
-		utils.SentrySendError(fmt.Errorf("AuthType verify error, AuthType is only support %s", AuthTypeDefault))
-		return nil, errors.New("AuthType verify error, not support, it should to be saveAkFile")
+	credentialFile, err := credentialFilePath(req.GetVolumeId(), opts.NodePublishPath)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	credentials = OssCredentials{AccessKeyID: opts.AkID, AccessKeySecret: opts.AkSecret}
+	if err := writeOssCredential(credentialFile, credentials); err != nil {
+		return nil, err
+	}
+	mounted = false
+	defer func() {
+		if !mounted {
+			if err := removeOssCredential(credentialFile); err != nil {
+				log.Warnf("remove failed OSS credential file %s: %v", credentialFile, err)
+			}
+		}
+	}()
 
 	if err := utils.CreateDir(opts.NodePublishPath, 0777); err != nil {
 		return nil, fmt.Errorf("NodePublishVolume:: oss, unable to create directory: %s", opts.NodePublishPath)
 	}
 
-	var mntCmd string
 	log.Debugf("NodePublishVolume:: Start mount source [%s:%s] to [%s]", opts.Bucket, opts.Path, opts.NodePublishPath)
-	mntCmd = fmt.Sprintf("s3fs %s:%s %s -o passwd_file=%s -o url=%s %s", opts.Bucket, opts.Path, opts.NodePublishPath, CredentialFile, opts.URL, defaultOtherOpts)
-	log.Infof("mntCmd is: %s", mntCmd)
-	//if _, err := utils.RunCommand(mntCmd); err != nil {
-	//	log.Errorf("Mount oss bucket to mountPath failed, error is: %s", err)
-	//	utils.SentrySendError(fmt.Errorf("Mount oss bucket to mountPath failed, error is: %s", err))
-	//	return nil, err
-	//}
-
-	if err := utils.RunSYSCommand(mntCmd); err != nil {
-		klog.Errorf("failed to run sys command: %+v", err)
-		return nil, err
+	if err := utils.RunSystemCommand("mount", s3fsMountArgs(opts, credentialFile)...); err != nil {
+		return nil, fmt.Errorf("mount OSS volume: %w", err)
 	}
+	// A successful s3fs process may already own this credential file even if a
+	// follow-up mount-info read fails, so keep it until an unpublish succeeds.
+	mounted = true
 
-	// recheck oss mount result
-	cmdMnt = fmt.Sprintf("mount | grep %s | grep -v grep", opts.NodePublishPath)
-	if err := utils.RunSYSCommand(cmdMnt); err != nil {
-		klog.Errorf("failed to run sys command: %+v", err)
+	mounted, err = utils.IsSystemMountPoint(opts.NodePublishPath)
+	if err != nil {
+		return nil, fmt.Errorf("verify OSS mount point: %w", err)
+	}
+	if !mounted {
 		log.Errorf("Remote bucket path [%s:%s] is not exist, please create it firstly", opts.Bucket, opts.Path)
 		utils.SentrySendError(fmt.Errorf("Remote bucket path [%s:%s] is not exist, please create it firstly", opts.Bucket, opts.Path))
-		return nil, err
+		return nil, errors.New("OSS mount did not appear at target path")
 	}
 
 	log.Infof("NodePublishVolume:: Mount Oss successful, volumeID:%s, oss: [%s:%s], targetPath:%s", req.VolumeId, opts.NodePublishPath, opts.Path, opts.NodePublishPath)
@@ -121,26 +120,53 @@ func (n *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 
 func (n *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
 	log.Infof("NodeUnpublishVolume:: starting Umount Oss Volume %s at path %s", req.VolumeId, req.TargetPath)
-
-	// skip the unmount if the path is not mounted
 	mountPoint := req.TargetPath
+	if req.GetVolumeId() == "" || mountPoint == "" {
+		return nil, status.Error(codes.InvalidArgument, "OSS volume ID and target path are required")
+	}
+	credentialFile, err := credentialFilePath(req.GetVolumeId(), mountPoint)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	removeCredential := false
+	defer func() {
+		if removeCredential {
+			if err := removeOssCredential(credentialFile); err != nil {
+				log.Warnf("remove OSS credential file %s: %v", credentialFile, err)
+			}
+		}
+	}()
 
-	cmdMnt := fmt.Sprintf("mount | grep %s | grep -v grep", mountPoint)
-	if err := utils.RunSYSCommand(cmdMnt); err != nil {
-		klog.Errorf("failed to run sys command: %+v", err)
+	mounted, err := utils.IsSystemMountPoint(mountPoint)
+	if err != nil {
+		return nil, fmt.Errorf("check OSS mount point: %w", err)
+	}
+	if !mounted {
 		log.Warnf("NodeUnpublishVolume:: oss, unmount mountpoint not found, skipping: %s", mountPoint)
+		removeCredential = true
 		return &csi.NodeUnpublishVolumeResponse{}, nil
 	}
 
-	// unmount the volume, use force umount on network not reachable or no other pod used
-	unmoutCmd := fmt.Sprintf("umount %s", mountPoint)
-	if err := utils.RunSYSCommand(unmoutCmd); err != nil {
-		klog.Errorf("failed to run sys command: %+v", err)
+	if err := utils.RunSystemCommand("unmount", mountPoint); err != nil {
 		return nil, fmt.Errorf("NodeUnpublishVolume:: oss, Umount oss bucket fail: %s", err.Error())
 	}
+	removeCredential = true
 
 	log.Infof("NodeUnpublishVolume:: Unmount oss Successfully on: %s", mountPoint)
 	return &csi.NodeUnpublishVolumeResponse{}, nil
+}
+
+func s3fsMountArgs(opts *PublishOptions, credentialFile string) []string {
+	args := []string{
+		fmt.Sprintf("%s:%s", opts.Bucket, opts.Path),
+		opts.NodePublishPath,
+		"-o", "passwd_file=" + credentialFile,
+		"-o", "url=" + opts.URL,
+	}
+	for _, option := range defaultS3fsOptions {
+		args = append(args, "-o", option)
+	}
+	return args
 }
 
 func (n *NodeServer) NodeStageVolume(context.Context, *csi.NodeStageVolumeRequest) (

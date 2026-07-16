@@ -232,8 +232,10 @@ Examples can be found [here](!https://github.com/capitalonline/cds-csi-driver/tr
 
 Dynamic OSS volumes allocate one generated prefix per PVC beneath the StorageClass `path`.
 Create the credential Secret before applying the StorageClass, then apply the PVC. The
-StorageClass must set both `csi.storage.k8s.io/provisioner-secret-*` and
-`csi.storage.k8s.io/node-publish-secret-*`; credentials are not stored in the generated PV.
+StorageClass must set `csi.storage.k8s.io/provisioner-secret-*` and
+`csi.storage.k8s.io/node-publish-secret-*`. When `reclaimPolicy: Delete` is used, it
+must also set `csi.storage.k8s.io/deletion-secret-*` so the controller can remove the
+generated prefix. Credentials are not stored in the generated PV.
 With `reclaimPolicy: Delete`, the driver deletes only the generated prefix for that
 PVC. Use `Retain` to preserve its objects after the PVC is removed.
 

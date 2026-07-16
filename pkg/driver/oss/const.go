@@ -1,11 +1,15 @@
 package oss
 
 const (
-	AuthTypeDefault     = "saveAkFile"
 	defaultOssRoot      = "/"
-	LocalCredentialFile = "/host/etc/s3pass"
-	CredentialFile      = "/etc/s3pass"
-	defaultOtherOpts    = "-o dbglevel=info -o curldbg -o allow_other -o use_path_request_style"
+	credentialDirectory = "/var/lib/kubelet/plugins/oss.csi.cds.net/credentials"
 	dynamicVolumePrefix = "oss-dynamic:"
 	dynamicMarkerName   = ".csi-volume"
 )
+
+var defaultS3fsOptions = []string{
+	"dbglevel=info",
+	"curldbg",
+	"allow_other",
+	"use_path_request_style",
+}

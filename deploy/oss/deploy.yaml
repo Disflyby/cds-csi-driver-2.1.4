@@ -227,7 +227,7 @@ spec:
     spec:
       initContainers:
       - name: install-oss-server
-        image: registry-bj.capitalonline.net/cck/oss-server:v1.0.1
+        image: registry-bj.capitalonline.net/cck/oss-server:v1.0.2
         imagePullPolicy: Always
         command: 
         - /bin/sh
@@ -262,8 +262,6 @@ spec:
           name: kubelet-dir
         - mountPath: /var/log/
           name: host-log
-        - mountPath: /host/etc
-          name: etc
         - mountPath: /var/run
           mountPropagation: Bidirectional
           name: run
@@ -317,9 +315,6 @@ spec:
       - hostPath:
           path: /var/log/
         name: host-log
-      - hostPath:
-          path: /etc
-        name: etc
       - hostPath:
           path: /var/run/
           type: DirectoryOrCreate

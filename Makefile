@@ -1,6 +1,8 @@
 PKG=github.com/capitalonline/cds-csi-driver
 IMAGE?=registry-bj.capitalonline.net/cck/cds-csi-driver
 IMAGE_OVERSEA=capitalonline/cds-csi-driver
+OSS_SERVER_IMAGE?=registry-bj.capitalonline.net/cck/oss-server
+OSS_SERVER_VERSION?=v1.0.2
 VERSION=v2.1.4
 GIT_COMMIT?=$(shell git rev-parse HEAD)
 BUILD_DATE?=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -40,6 +42,10 @@ image-release:
 .PHONY: image
 image:
 	docker build -t $(IMAGE):latest .
+
+.PHONY: oss-server-image
+oss-server-image:
+	docker build -f dist/Dockerfile -t $(OSS_SERVER_IMAGE):$(OSS_SERVER_VERSION) dist
 
 .PHONY: release
 release: image-release

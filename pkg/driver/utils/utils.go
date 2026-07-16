@@ -350,26 +350,55 @@ func FsInfo(path string) (int64, int64, int64, int64, int64, int64, error) {
 	return available, capacity, usage, inodes, inodesFree, inodesUsed, nil
 }
 
-func RunSYSCommand(cmd string) error {
-	conn, err := net.Dial("unix", SockFile)
+type systemCommandRequest struct {
+	Operation string   `json:"operation"`
+	Args      []string `json:"args"`
+}
+
+type systemCommandResponse struct {
+	Success bool   `json:"success"`
+	Mounted bool   `json:"mounted"`
+	Error   string `json:"error,omitempty"`
+}
+
+// RunSystemCommand asks the node-local oss-server to run an allowlisted
+// command. The request is structured so Kubernetes-provided values never pass
+// through a shell.
+func RunSystemCommand(operation string, args ...string) error {
+	response, err := runSystemCommand(operation, args)
 	if err != nil {
-		panic(err)
+		return err
+	}
+	if !response.Success {
+		return fmt.Errorf("oss-server %s failed: %s", operation, response.Error)
+	}
+	return nil
+}
+
+func IsSystemMountPoint(targetPath string) (bool, error) {
+	response, err := runSystemCommand("is-mounted", []string{targetPath})
+	if err != nil {
+		return false, err
+	}
+	if !response.Success {
+		return false, fmt.Errorf("oss-server mount check failed: %s", response.Error)
+	}
+	return response.Mounted, nil
+}
+
+func runSystemCommand(operation string, args []string) (systemCommandResponse, error) {
+	conn, err := net.DialTimeout("unix", SockFile, 5*time.Second)
+	if err != nil {
+		return systemCommandResponse{}, fmt.Errorf("connect to oss-server: %w", err)
 	}
 	defer conn.Close()
 
-	if _, err = conn.Write([]byte(cmd)); err != nil {
-		return fmt.Errorf("failed to write: %+v", err)
+	if err := json.NewEncoder(conn).Encode(systemCommandRequest{Operation: operation, Args: args}); err != nil {
+		return systemCommandResponse{}, fmt.Errorf("write oss-server request: %w", err)
 	}
-
-	buf := make([]byte, 1024)
-	n, err := conn.Read(buf)
-	if err != nil {
-		return fmt.Errorf("failed to read conn: %+v", err)
+	response := systemCommandResponse{}
+	if err := json.NewDecoder(conn).Decode(&response); err != nil {
+		return systemCommandResponse{}, fmt.Errorf("read oss-server response: %w", err)
 	}
-
-	if string(buf[:n]) == "Success" {
-		return nil
-	}
-
-	return fmt.Errorf("failed to run cmd: %+v", cmd)
+	return response, nil
 }

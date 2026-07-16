@@ -14,7 +14,7 @@ spec:
     spec:
       initContainers:
       - name: install-oss-server
-        image: registry-bj.capitalonline.net/cck/oss-server:v1.0.1
+        image: registry-bj.capitalonline.net/cck/oss-server:v1.0.2
         imagePullPolicy: Always
         command:
         - /bin/sh
@@ -54,8 +54,6 @@ spec:
           mountPath: /var/lib/kubelet/
         - name: host-log
           mountPath: /var/log/
-        - name: etc
-          mountPath: /host/etc
         - name: run
           mountPath: /var/run
           mountPropagation: Bidirectional
@@ -100,9 +98,6 @@ spec:
       - name: host-log
         hostPath:
           path: /var/log/
-      - name: etc
-        hostPath:
-          path: /etc
       - name: run
         hostPath:
           path: /var/run/
