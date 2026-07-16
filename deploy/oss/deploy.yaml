@@ -162,7 +162,7 @@ spec:
         env:
         - name: CSI_ENDPOINT
           value: unix://socketDir/csi.sock
-        image: registry-bj.capitalonline.net/cck/cds-csi-driver:v2.1.3
+        image: harbor-dev.yun-paas.com/csi_agent/cds-csi-driver:v2.1.5
         imagePullPolicy: Always
         name: csi-controller-server
         resources:
@@ -183,7 +183,7 @@ spec:
         env:
         - name: ADDRESS
           value: /socketDir/csi.sock
-        image: registry-bj.capitalonline.net/cck/csi-provisioner:v1.5.0
+        image: harbor-dev.yun-paas.com/csi_agent/csi-provisioner:v1.5.0
         name: csi-provisioner
         volumeMounts:
         - mountPath: /socketDir
@@ -191,7 +191,7 @@ spec:
       - args:
         - --csi-address=/csi/csi.sock
         - --health-port=9808
-        image: registry-bj.capitalonline.net/cck/csi-livenessprobe:v2.0.0
+        image: harbor-dev.yun-paas.com/csi_agent/csi-livenessprobe:v2.0.0
         name: liveness-probe
         volumeMounts:
         - mountPath: /csi
@@ -227,7 +227,7 @@ spec:
     spec:
       initContainers:
       - name: install-oss-server
-        image: registry-bj.capitalonline.net/cck/oss-server:v1.0.2
+        image: harbor-dev.yun-paas.com/csi_agent/oss-server:v1.0.3
         imagePullPolicy: Always
         command: 
         - /bin/sh
@@ -248,7 +248,7 @@ spec:
         env:
         - name: CSI_ENDPOINT
           value: unix://var/lib/kubelet/plugins/oss.csi.cds.net/csi.sock
-        image: registry-bj.capitalonline.net/cck/cds-csi-driver:v2.1.3
+        image: harbor-dev.yun-paas.com/csi_agent/cds-csi-driver:v2.1.5
         imagePullPolicy: Always
         name: oss-csi-node-server
         securityContext:
@@ -274,7 +274,7 @@ spec:
           value: /var/lib/kubelet/plugins/oss.csi.cds.net/csi.sock
         - name: DRIVER_REG_SOCK_PATH
           value: /var/lib/kubelet/plugins/oss.csi.cds.net/csi.sock
-        image: registry-bj.capitalonline.net/cck/csi-node-driver-registrar:v1.2.0
+        image: harbor-dev.yun-paas.com/csi_agent/csi-node-driver-registrar:v1.2.0
         imagePullPolicy: Always
         lifecycle:
           preStop:
@@ -292,7 +292,7 @@ spec:
       - args:
         - --csi-address=/var/lib/kubelet/plugins/oss.csi.cds.net/csi.sock
         - --health-port=9808
-        image: registry-bj.capitalonline.net/cck/csi-livenessprobe:v2.0.0
+        image: harbor-dev.yun-paas.com/csi_agent/csi-livenessprobe:v2.0.0
         name: oss-liveness-probe
         volumeMounts:
         - mountPath: /var/lib/kubelet/

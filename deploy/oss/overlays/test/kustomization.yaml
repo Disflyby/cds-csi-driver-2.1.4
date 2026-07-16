@@ -5,5 +5,18 @@ patchesStrategicMerge:
   - node.yaml
 
 images:
-  - name: registry-bj.capitalonline.net/cck/cds-csi-driver
-    newTag: test
+- name: registry-bj.capitalonline.net/cck/cds-csi-driver
+  newName: harbor-dev.yun-paas.com/csi_agent/cds-csi-driver
+  newTag: test
+- name: registry-bj.capitalonline.net/cck/oss-server
+  newName: harbor-dev.yun-paas.com/csi_agent/oss-server
+  newTag: v1.0.3
+- name: registry-bj.capitalonline.net/cck/csi-provisioner
+  newName: harbor-dev.yun-paas.com/csi_agent/csi-provisioner
+  newTag: v1.5.0
+- name: registry-bj.capitalonline.net/cck/csi-livenessprobe
+  newName: harbor-dev.yun-paas.com/csi_agent/csi-livenessprobe
+  newTag: v2.0.0
+- name: registry-bj.capitalonline.net/cck/csi-node-driver-registrar
+  newName: harbor-dev.yun-paas.com/csi_agent/csi-node-driver-registrar
+  newTag: v1.2.0

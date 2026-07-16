@@ -1,24 +1,21 @@
 PKG=github.com/capitalonline/cds-csi-driver
-IMAGE?=registry-bj.capitalonline.net/cck/cds-csi-driver
-IMAGE_OVERSEA=capitalonline/cds-csi-driver
-OSS_SERVER_IMAGE?=registry-bj.capitalonline.net/cck/oss-server
-OSS_SERVER_VERSION?=v1.0.2
-VERSION=v2.1.4
+HARBOR_REPOSITORY?=harbor-dev.yun-paas.com/csi_agent
+IMAGE?=$(HARBOR_REPOSITORY)/cds-csi-driver
+OSS_SERVER_IMAGE?=$(HARBOR_REPOSITORY)/oss-server
+VERSION?=v2.1.5
+OSS_SERVER_VERSION?=v1.0.3
 GIT_COMMIT?=$(shell git rev-parse HEAD)
 BUILD_DATE?=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS?="-X ${PKG}/pkg/common.version=${VERSION} -X ${PKG}/pkg/common.gitCommit=${GIT_COMMIT} -X ${PKG}/pkg/common.buildDate=${BUILD_DATE} -s -w"
 NAS_DEPLOY_PATH=./deploy/nas
 NAS_KUSTOMIZATION_RELEASE_PATH=${NAS_DEPLOY_PATH}/overlays/release
 NAS_KUSTOMIZATION_TEST_PATH=${NAS_DEPLOY_PATH}/overlays/test
-NAS_KUSTOMIZATION_FILE=${NAS_KUSTOMIZATION_RELEASE_PATH}/kustomization.yaml
 OSS_DEPLOY_PATH=./deploy/oss
 OSS_KUSTOMIZATION_RELEASE_PATH=${OSS_DEPLOY_PATH}/overlays/release
 OSS_KUSTOMIZATION_TEST_PATH=${OSS_DEPLOY_PATH}/overlays/test
-OSS_KUSTOMIZATION_FILE=${OSS_KUSTOMIZATION_RELEASE_PATH}/kustomization.yaml
 DISK_DEPLOY_PATH=./deploy/disk
 DISK_KUSTOMIZATION_RELEASE_PATH=${DISK_DEPLOY_PATH}/overlays/release
 DISK_KUSTOMIZATION_TEST_PATH=${DISK_DEPLOY_PATH}/overlays/test
-DISK_KUSTOMIZATION_FILE=${DISK_KUSTOMIZATION_RELEASE_PATH}/kustomization.yaml
 EBS_DISK_DEPLOY_PATH=./deploy/ebs_disk
 EBS_DISK_KUSTOMIZATION_RELEASE_PATH=${EBS_DISK_DEPLOY_PATH}/overlays/release
 EBS_DISK_KUSTOMIZATION_TEST_PATH=${EBS_DISK_DEPLOY_PATH}/overlays/test
@@ -37,7 +34,6 @@ container-binary:
 .PHONY: image-release
 image-release:
 	docker build -t $(IMAGE):$(VERSION) .
-	docker tag $(IMAGE):$(VERSION) $(IMAGE_OVERSEA):$(VERSION)
 
 .PHONY: image
 image:
@@ -48,18 +44,12 @@ oss-server-image:
 	docker build -f dist/Dockerfile -t $(OSS_SERVER_IMAGE):$(OSS_SERVER_VERSION) dist
 
 .PHONY: release
-release: image-release
+release: image-release oss-server-image
 	docker push $(IMAGE):$(VERSION)
-	docker push $(IMAGE_OVERSEA):$(VERSION)
-
-.PHONY: sync-version
-sync-version:
-	sed -i.bak 's/newTag: .*/newTag: '${VERSION}'/g' ${NAS_KUSTOMIZATION_FILE} && rm ${NAS_KUSTOMIZATION_FILE}.bak
-	sed -i.bak 's/newTag: .*/newTag: '${VERSION}'/g' ${OSS_KUSTOMIZATION_FILE} && rm ${OSS_KUSTOMIZATION_FILE}.bak
-	sed -i.bak 's/newTag: .*/newTag: '${VERSION}'/g' ${DISK_KUSTOMIZATION_FILE} && rm ${DISK_KUSTOMIZATION_FILE}.bak
+	docker push $(OSS_SERVER_IMAGE):$(OSS_SERVER_VERSION)
 
 .PHONY: kustomize
-kustomize:sync-version
+kustomize:
 	kubectl kustomize ${NAS_KUSTOMIZATION_RELEASE_PATH} > ${NAS_DEPLOY_PATH}/deploy.yaml
 	kubectl kustomize ${OSS_KUSTOMIZATION_RELEASE_PATH} > ${OSS_DEPLOY_PATH}/deploy.yaml
 	kubectl kustomize ${DISK_KUSTOMIZATION_RELEASE_PATH} > ${DISK_DEPLOY_PATH}/deploy.yaml
