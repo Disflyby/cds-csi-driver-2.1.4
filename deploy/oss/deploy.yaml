@@ -165,6 +165,8 @@ spec:
         image: harbor-dev.yun-paas.com/csi_agent/cds-csi-driver:v2.1.5
         imagePullPolicy: Always
         name: csi-controller-server
+        securityContext:
+          privileged: true
         resources:
           limits:
             cpu: 100m
@@ -177,6 +179,9 @@ spec:
           name: socket-dir
         - mountPath: /var/log/
           name: host-log
+        - mountPath: /host/etc
+          name: host-etc
+          readOnly: true
       - args:
         - --csi-address=$(ADDRESS)
         - --v=5
@@ -208,6 +213,10 @@ spec:
       - hostPath:
           path: /var/log/
         name: host-log
+      - hostPath:
+          path: /etc
+          type: Directory
+        name: host-etc
   updateStrategy:
     type: RollingUpdate
 ---
@@ -264,6 +273,9 @@ spec:
         - mountPath: /var/run
           mountPropagation: Bidirectional
           name: run
+        - mountPath: /host/etc
+          name: host-etc
+          readOnly: true
       - args:
         - --v=5
         - --csi-address=$(ADDRESS)
@@ -314,6 +326,10 @@ spec:
       - hostPath:
           path: /var/log/
         name: host-log
+      - hostPath:
+          path: /etc
+          type: Directory
+        name: host-etc
       - hostPath:
           path: /var/run/
           type: DirectoryOrCreate

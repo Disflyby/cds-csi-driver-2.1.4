@@ -56,6 +56,9 @@ spec:
         - name: run
           mountPath: /var/run
           mountPropagation: Bidirectional
+        - name: host-etc
+          mountPath: /host/etc
+          readOnly: true
       - name: oss-driver-registrar
         image: registry-bj.capitalonline.net/cck/csi-node-driver-registrar:v1.2.0
         imagePullPolicy: Always
@@ -97,6 +100,10 @@ spec:
       - name: host-log
         hostPath:
           path: /var/log/
+      - name: host-etc
+        hostPath:
+          path: /etc
+          type: Directory
       - name: run
         hostPath:
           path: /var/run/

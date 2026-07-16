@@ -31,11 +31,16 @@ spec:
           env:
             - name: CSI_ENDPOINT
               value: unix://socketDir/csi.sock
+          securityContext:
+            privileged: true
           volumeMounts:
             - name: socket-dir
               mountPath: /socketDir
             - name: host-log
               mountPath: /var/log/
+            - name: host-etc
+              mountPath: /host/etc
+              readOnly: true
           resources:
             requests:
               cpu: 100m
@@ -68,3 +73,7 @@ spec:
         - name: host-log
           hostPath:
             path: /var/log/
+        - name: host-etc
+          hostPath:
+            path: /etc
+            type: Directory
