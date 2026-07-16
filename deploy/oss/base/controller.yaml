@@ -28,9 +28,14 @@ spec:
           args:
             - --endpoint=$(CSI_ENDPOINT)
             - --driver=oss.csi.cds.net
+            - --nodeid=$(NODE_NAME)
           env:
             - name: CSI_ENDPOINT
               value: unix://socketDir/csi.sock
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
           securityContext:
             privileged: true
           volumeMounts:

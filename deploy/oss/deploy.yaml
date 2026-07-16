@@ -159,9 +159,14 @@ spec:
       - args:
         - --endpoint=$(CSI_ENDPOINT)
         - --driver=oss.csi.cds.net
+        - --nodeid=$(NODE_NAME)
         env:
         - name: CSI_ENDPOINT
           value: unix://socketDir/csi.sock
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
         image: harbor-dev.yun-paas.com/csi_agent/cds-csi-driver:v2.1.5
         imagePullPolicy: Always
         name: csi-controller-server
@@ -253,9 +258,14 @@ spec:
         - --endpoint=$(CSI_ENDPOINT)
         - --v=5
         - --driver=oss.csi.cds.net
+        - --nodeid=$(NODE_NAME)
         env:
         - name: CSI_ENDPOINT
           value: unix://var/lib/kubelet/plugins/oss.csi.cds.net/csi.sock
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
         image: harbor-dev.yun-paas.com/csi_agent/cds-csi-driver:v2.1.5
         imagePullPolicy: Always
         name: oss-csi-node-server
