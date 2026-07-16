@@ -1,0 +1,11 @@
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: pvc-sc-filesystem
+spec:
+  accessModes:
+  - ReadWriteMany
+  storageClassName:  sc-filesystem
+  resources:
+    requests:
+      storage: 500Gi

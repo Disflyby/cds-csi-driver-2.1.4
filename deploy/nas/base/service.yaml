@@ -1,0 +1,13 @@
+kind: Service
+apiVersion: v1
+metadata:
+  name: nas-csi-provisioner
+  namespace: kube-system
+  labels:
+    name: nas-csi-provisioner
+spec:
+  selector:
+    type: nas-csi-provisioner
+  ports:
+    - name: healthz
+      port: 9809

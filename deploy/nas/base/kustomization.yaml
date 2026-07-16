@@ -1,0 +1,8 @@
+bases:
+  - ../../rbac/nas
+
+resources:
+  - controller.yaml
+  - csidriver.yaml
+  - node.yaml
+  - service.yaml
