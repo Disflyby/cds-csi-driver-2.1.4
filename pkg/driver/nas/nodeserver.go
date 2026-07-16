@@ -36,58 +36,56 @@ func (n *NodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCa
 
 func (n *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
 	log.Infof("NodePublishVolume:: starting mount nas volume with req: %+v", req)
-	var opts, err = parsePublishOptions(req)
-
-	log.Debugf("NodePublishVolume:: parsed PublishOptions options: %+v", opts)
-
+	opts, err := parsePublishOptions(req)
 	if err != nil {
-		return nil, fmt.Errorf("nas, failed to parse mount options %+v: %s", opts, err)
+		return nil, status.Errorf(codes.InvalidArgument, "parse NFS mount options: %v", err)
 	}
-
-	// directly return if the target mountPath has been mounted
-	if utils.Mounted(opts.NodePublishPath) {
+	mounted, err := isMountPoint(opts.NodePublishPath)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "check NFS mount point %s: %v", opts.NodePublishPath, err)
+	}
+	if mounted {
 		log.Warnf("NodePublishVolume:: nas, mount point %s has existed, ignore", opts.NodePublishPath)
 		return &csi.NodePublishVolumeResponse{}, nil
 	}
-
-	optimizeNasSetting()
-
-	// try to create the mount point, in case it is not created
-	if err = utils.CreateDir(opts.NodePublishPath, mountPointMode); err != nil {
-		return nil, fmt.Errorf("NodePublishVolume:: nas, unable to create directory: %s", opts.NodePublishPath)
+	if err := utils.CreateDir(opts.NodePublishPath, mountPointMode); err != nil {
+		return nil, status.Errorf(codes.Internal, "create NFS mount point %s: %v", opts.NodePublishPath, err)
 	}
-
-	// mount the nas server path to the node published directory
 	if err := mountNasVolume(opts, req.VolumeId); err != nil {
-		return nil, fmt.Errorf("NodePublishVolume:: nas, mount nfs error: %s", err.Error())
+		return nil, status.Errorf(codes.Internal, "mount NFS volume %s: %v", req.VolumeId, err)
 	}
-
-	// changes the mode of the published directory
-	changeNasMode(opts)
-
-	// check if the directory is mounted
-	if !utils.Mounted(opts.NodePublishPath) {
-		return nil, fmt.Errorf("NodePublishVolume:: nas, mount check failed after the mount: %s", opts.NodePublishPath)
+	mounted, err = isMountPoint(opts.NodePublishPath)
+	if err != nil || !mounted {
+		_ = unmountNFS(opts.NodePublishPath)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "verify NFS mount point %s: %v", opts.NodePublishPath, err)
+		}
+		return nil, status.Errorf(codes.Internal, "NFS mount check failed for %s", opts.NodePublishPath)
 	}
-
+	if err := changeNasMode(opts); err != nil {
+		_ = unmountNFS(opts.NodePublishPath)
+		return nil, status.Errorf(codes.InvalidArgument, "apply NFS mode: %v", err)
+	}
 	log.Infof("NodePublishVolume:: volume %s mount successfully on mount point: %s", req.VolumeId, opts.NodePublishPath)
 	return &csi.NodePublishVolumeResponse{}, nil
 }
 
 func (n *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
 	log.Infof("NodeUnpublishVolume:: starting Umount Nas Volume %s at path %s", req.VolumeId, req.TargetPath)
-
-	// skip the unmount if the path is not mounted
 	mountPoint := req.TargetPath
-	if !utils.Mounted(mountPoint) {
+	if mountPoint == "" {
+		return nil, status.Error(codes.InvalidArgument, "target path is required")
+	}
+	mounted, err := isMountPoint(mountPoint)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "check NFS mount point %s: %v", mountPoint, err)
+	}
+	if !mounted {
 		log.Warnf("NodeUnpublishVolume:: nas, unmount mountpoint not found, skipping: %s", mountPoint)
 		return &csi.NodeUnpublishVolumeResponse{}, nil
 	}
-
-	// unmount the volume, use force umount on network not reachable or no other pod used
-	unmoutCmd := fmt.Sprintf("umount %s", mountPoint)
-	if _, err := utils.RunCommand(unmoutCmd); err != nil {
-		return nil, fmt.Errorf("NodeUnpublishVolume:: nas, Umount nfs fail: %s", err.Error())
+	if err := unmountNFS(mountPoint); err != nil {
+		return nil, status.Errorf(codes.Internal, "unmount NFS path %s: %v", mountPoint, err)
 	}
 
 	log.Infof("NodeUnpublishVolume:: Unmount nas Successfully on: %s", mountPoint)

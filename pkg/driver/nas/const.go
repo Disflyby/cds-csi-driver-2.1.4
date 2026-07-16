@@ -3,7 +3,6 @@ package nas
 import "time"
 
 const (
-	sunRPCFile        = "/etc/modprobe.d/sunrpc.conf"
 	createVolumeRoot  = "/nas_volume/create"
 	deleteVolumeRoot  = "/nas_volume/delete"
 	publishVolumeRoot = "/nas_volume/publish"
@@ -17,7 +16,6 @@ const (
 	fileSystemLiteral = "filesystem"
 	defaultNfsVersion = "4.0"
 	defaultDeleteNas  = "false"
-	defaultNfsPath    = "/nfsshare"
 	defaultNasUsage   = "1"
 	defaultClusterID  = "CDS_CLUSTER_ID"
 )

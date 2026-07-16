@@ -167,7 +167,7 @@ parameters:
   server: 140.210.75.195
   path: /nfsshare
   vers: 4.0
-  strategy: RoundRobin
+  threshold: "90"
   options: noresvport
   archiveOnDelete: true
 ```
@@ -178,10 +178,10 @@ Description:
 | :-------------: | :----------------------------------------------------------- | :------: | :----------------------------------------------------------- |
 |   provisioner   | nas.csi.cds.net                                              |   yes    | CDS csi driver's name                                        |
 |  reclaimPolicy  | Delete \| Retain                                             |   yes    | `Delete` means that PV will be deleted with PVC delete<br />`Retain` means that PV will be retained when PVC delete |
-|    volumeAs     | subpath                                                      |    no    | Default is `subpath`<br />`subpath`  means each PV will be provisioned on a specified NAS server.<br />`filesystem` means each PV will be provision with a new NAS Storage and use the storage exclusively. |
+|    volumeAs     | subpath                                                      |    no    | Default is `subpath`. Each PV is provisioned into an isolated directory beneath the configured NFS export. |
 |     servers     | eg.<br />140.210.75.194/nfsshare/nas-csi-cds-pv, 140.210.75.195/nfsshare/nas-csi-cds-pv |    no    | multi servers are supported by a StorageClass. It should be separated by "," between each server/path. |
 |     server      | e.g. <br />140.210.75.195                                    |    no    | the mount point of the nfs server,can be found on NAS product list |
-|    strategy     | e.g. <br />RoundRobin                                        |    no    | Only used for multi servers option. The value is supposed to be "RoundRobin" or "Random". The default value is "RoundRobin" |
+|    threshold    | `0.9` or `90`                                                |    no    | Maximum eligible NAS usage. Values in `[0,1]` are fractions; values in `[0,100]` are percentages. Default `1` means 100%. |
 |      path       | e.g. <br />/nfsshare                                         |    no    | the root path that the pv will dynamically provisioned on the NAS server. It must start with `/nfsshare`. |
 |      vers       | `3` or `4.0`                                                 |    no    | the protocol version to use for the nfs mount. if not provided, `4.0` will be used by default |
 |     options     | e.g. `noresvport`                                            |    no    | options for the nfs mount. If not provided it will be set to `noresvport` for `vers=4.0` and `noresvport,nolock,tcp` for `vers=3` |
@@ -195,34 +195,13 @@ Kindly Remind:
 
 ​	b) servers and server cant be empty together. It means that servers or server is not empty at least in one yaml. 
 
-#### volumeAs: filesystem 
+​	c) With multiple eligible servers, the driver selects the server deterministically from the generated PV name. The remote directory and its `.csi-volume` marker make a retried CreateVolume response stable after a controller restart.
 
-sc.yaml
+​	d) `modeType: recursive` is not supported. Use the default `non-recursive` mode change or manage recursive permissions outside CSI.
 
-```yaml
-provisioner: nas.csi.cds.net
-reclaimPolicy: Delete
-parameters:
-  volumeAs: filesystem
-  protocolType: NFS
-  storageType: high_disk
-  siteID: *** 
-  clusterID: *** 
-  deleteVolume: true 
-```
+#### volumeAs: filesystem
 
-Description:
-
-| Key           | Value            | Required | Description                                                  |
-| ------------- | ---------------- | -------- | ------------------------------------------------------------ |
-| provisioner   | nas.csi.cds.net  | yes      | CDS csi driver's name                                        |
-| reclaimPolicy | Delete \| Retain | yes      | `Delete` means that PV will be deleted with PVC delete<br />`Retain` means that PV will be retained when PVC delete |
-| volumeAs      | filesystem       | yes      | Default is `subpath`<br />`subpath`  means each pv will be provisioned on a specified NAS server.<br />`filesystem` means each PV will be provision with a new NAS Storage and use the storage exclusively. |
-| storageType   | high_disk        | yes      | Must be 'high_disk', only support 'high_disk'                |
-| siteID        | ***              | yes      | Cluster's site_id                                            |
-| clusterID     | ***              | yes      | cluster_id                                                   |
-| deleteVolume  | true \| false    | no       | Optional, default is 'false'<br />`false` means that NAS storage will retain when PV delete<br />`true` means that NAS storage will be deleted with PV delete |
-| protocolType  | NFS              | no       | Optional, default is 'NFS'<br />must be 'NFS', only support 'NFS' |
+Dynamic `volumeAs: filesystem` provisioning is disabled. Its create workflow depended on controller memory and returned intentional errors between NAS API calls, so it could not provide CSI idempotency after a controller restart. Existing filesystem PVs remain mountable and retain their legacy delete path; create new dynamic NAS volumes with `volumeAs: subpath`.
 
 ## To use the OSS driver
 

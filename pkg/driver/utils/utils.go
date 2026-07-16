@@ -169,6 +169,17 @@ func RunCommand(cmd string) (string, error) {
 	return string(out), nil
 }
 
+// RunCommandArgs runs a command without a shell. Callers handling values from
+// CSI requests must use this instead of RunCommand so argument boundaries are
+// preserved and command substitution is impossible.
+func RunCommandArgs(name string, args ...string) (string, error) {
+	out, err := exec.Command(name, args...).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to run %s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
+}
+
 // CreateDir create the target directory with error handling
 func CreateDir(target string, mode int) error {
 	fi, err := os.Lstat(target)

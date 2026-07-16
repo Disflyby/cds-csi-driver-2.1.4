@@ -39,32 +39,20 @@ type NfsOpts struct {
 	Mode      string
 	ModeType  string
 	Options   string
-	Strategy  string
 	VolumeAs  string
 	Threshold string
-}
-
-type NfsFilesystemOpts struct {
-	ProtocolType string
-	StorageType  string
-	SiteID       string
-	ClusterID    string
-	DeleteNas    bool
 }
 
 type PublishOptions struct {
 	NfsOpts
 	NodePublishPath string
 	AllowSharePath  bool
+	DynamicSubpath  bool
+	Readonly        bool
 }
 
 type VolumeCreateSubpathOptions struct {
 	NfsOpts
-	VolumeAs string
-}
-
-type VolumeCreateFilesystemOptions struct {
-	NfsFilesystemOpts
 	VolumeAs string
 }
 
