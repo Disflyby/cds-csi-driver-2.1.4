@@ -19,17 +19,15 @@ import (
 
 func (opts *NfsOpts) parsNfsOpts() error {
 	opts.versNormalization()
-	// parse path
 	if opts.Path == "" {
-		log.Warnf("nas, path is empty, using default root %s", defaultNFSRoot)
-		opts.Path = defaultNFSRoot
+		return errors.New("NFS path is required")
 	}
-	// remove / if path end with /;
+	// Preserve the NFS export root while normalizing non-root trailing slashes.
 	for opts.Path != "/" && strings.HasSuffix(opts.Path, "/") {
 		opts.Path = opts.Path[0 : len(opts.Path)-1]
 	}
-	if !strings.HasPrefix(opts.Path, defaultNFSRoot) {
-		return fmt.Errorf("the path format is illegal, need start with %s, given: %s", defaultNFSRoot, opts.Path)
+	if err := validateNFSPath(opts.Path, "path"); err != nil {
+		return err
 	}
 
 	// parse options, config defaults for nas based on vers
@@ -337,7 +335,7 @@ func (opts *NfsOpts) createNasSubDirWithMarker(mountRoot, subDir, volumeID strin
 	log.Debugf("nas, running creatNasSubDir: root: %s, path: %s, subDir:%s", mountRoot, opts.Path, subDir)
 
 	localMountPath := filepath.Join(mountRoot, subDir)
-	fullPath := filepath.Join(localMountPath, strings.TrimPrefix(opts.Path, defaultNFSRoot), subDir)
+	fullPath := filepath.Join(localMountPath, subDir)
 	mounted, err := isMountPoint(localMountPath)
 	if err != nil {
 		return err
@@ -360,7 +358,7 @@ func (opts *NfsOpts) createNasSubDirWithMarker(mountRoot, subDir, volumeID strin
 		removeMountPoint(directory)
 	}(localMountPath)
 
-	if err := mountNFS(opts.Server, defaultNFSRoot, localMountPath, opts.Vers, opts.Options, false); err != nil {
+	if err := mountNFS(opts.Server, opts.Path, localMountPath, opts.Vers, opts.Options, false); err != nil {
 		return err
 	}
 	if volumeID != "" {
@@ -403,7 +401,7 @@ func parseConfiguredNFSServers(serverList []string) ([]*NfsServer, error) {
 		address := strings.TrimSpace(addrPath[0])
 		pathValue := strings.TrimSpace(addrPath[1])
 		if pathValue == "" {
-			pathValue = defaultNFSRoot
+			pathValue = "/"
 		}
 		for _, part := range strings.Split(strings.TrimPrefix(pathValue, "/"), "/") {
 			if part == ".." {
@@ -413,9 +411,6 @@ func parseConfiguredNFSServers(serverList []string) ([]*NfsServer, error) {
 		path := filepath.Join("/", pathValue)
 		if err := validateNFSInput(address, path, "/", defaultNfsVersion, ""); err != nil {
 			return nil, err
-		}
-		if !strings.HasPrefix(path, defaultNFSRoot) {
-			return nil, fmt.Errorf("the path format is illegal, need start with %s, given: %s", defaultNFSRoot, path)
 		}
 		servers = append(servers, &NfsServer{Address: address, Path: path})
 	}

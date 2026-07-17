@@ -7,7 +7,46 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/container-storage-interface/spec/lib/go/csi"
 )
+
+func TestParseVolumeCreateSubpathOptionsPreservesExportPath(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "root export", path: "/"},
+		{name: "nested export", path: "/exports/team-a"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			opts, err := parseVolumeCreateSubpathOptions(&csi.CreateVolumeRequest{
+				Name: "pvc-123",
+				Parameters: map[string]string{
+					"server":   "nfs.example.internal",
+					"path":     test.path,
+					"vers":     "4.0",
+					"volumeAs": "subpath",
+				},
+			})
+			if err != nil {
+				t.Fatalf("parseVolumeCreateSubpathOptions() error = %v", err)
+			}
+			if opts.Server != "nfs.example.internal" || opts.Path != test.path {
+				t.Fatalf("options = server %q, path %q; want server %q, path %q", opts.Server, opts.Path, "nfs.example.internal", test.path)
+			}
+		})
+	}
+}
+
+func TestNFSOptionsRejectEmptyExportPath(t *testing.T) {
+	opts := &NfsOpts{Server: "nfs.example.internal"}
+	if err := opts.parsNfsOpts(); err == nil {
+		t.Fatal("parsNfsOpts() error = nil for an empty export path")
+	}
+}
 
 func TestNFSMountArgsPreserveArgumentBoundaries(t *testing.T) {
 	args, err := nfsMountArgs("nfs.example.internal", "/nfsshare/pvc-123", "/var/lib/kubelet/pods/pvc-123", "4.0", "rw,noresvport", true)
