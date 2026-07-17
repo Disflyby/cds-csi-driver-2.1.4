@@ -39,6 +39,12 @@ func (opts *OssOpts) parsOssOpts() error {
 	}
 	opts.AddressingStyle = addressingStyle
 
+	signatureType, err := normalizeSignatureType(opts.SignatureType)
+	if err != nil {
+		return err
+	}
+	opts.SignatureType = signatureType
+
 	if opts.Path == "" {
 		log.Warnf("oss, path is empty, using default root %s", defaultOssRoot)
 		opts.Path = defaultOssRoot
@@ -67,6 +73,17 @@ func normalizeAddressingStyle(value string) (string, error) {
 	}
 	if style != ossAddressingStylePath && style != ossAddressingStyleVirtual {
 		return "", errors.New("OSS addressingStyle must be path or virtual")
+	}
+	return style, nil
+}
+
+func normalizeSignatureType(value string) (string, error) {
+	style := strings.ToLower(strings.TrimSpace(value))
+	if style == "" {
+		return defaultOSSSignatureType, nil
+	}
+	if style != ossSignatureTypeV2 && style != ossSignatureTypeV4 {
+		return "", errors.New("OSS signatureType must be v2 or v4")
 	}
 	return style, nil
 }

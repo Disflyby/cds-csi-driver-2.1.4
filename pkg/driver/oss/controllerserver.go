@@ -24,6 +24,8 @@ type dynamicVolumeRef struct {
 	URL             string `json:"url"`
 	Path            string `json:"path"`
 	AddressingStyle string `json:"addressingStyle,omitempty"`
+	Region          string `json:"region,omitempty"`
+	SignatureType   string `json:"signatureType,omitempty"`
 }
 
 func NewControllerServer(d *OssDriver) *ControllerServer {
@@ -79,6 +81,8 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 			"url":             ref.URL,
 			"path":            ref.Path,
 			"addressingStyle": ref.AddressingStyle,
+			"region":          ref.Region,
+			"signatureType":   ref.SignatureType,
 		},
 	}}, nil
 }
@@ -137,6 +141,10 @@ func newDynamicVolumeRef(parameters map[string]string, volumeName string) (dynam
 			ref.Path = strings.TrimSpace(value)
 		case "addressingstyle":
 			ref.AddressingStyle = strings.TrimSpace(value)
+		case "region":
+			ref.Region = strings.TrimSpace(value)
+		case "signaturetype":
+			ref.SignatureType = strings.TrimSpace(value)
 		}
 	}
 	if ref.Bucket == "" || ref.URL == "" {
@@ -150,6 +158,11 @@ func newDynamicVolumeRef(parameters map[string]string, volumeName string) (dynam
 		return ref, err
 	}
 	ref.AddressingStyle = addressingStyle
+	signatureType, err := normalizeSignatureType(ref.SignatureType)
+	if err != nil {
+		return ref, err
+	}
+	ref.SignatureType = signatureType
 	for _, segment := range strings.Split(strings.Trim(ref.Path, "/"), "/") {
 		if segment == ".." {
 			return ref, fmt.Errorf("StorageClass parameter path must not contain ..")
@@ -188,6 +201,10 @@ func decodeDynamicVolumeID(volumeID string) (dynamicVolumeRef, bool, error) {
 	if err != nil {
 		return dynamicVolumeRef{}, true, err
 	}
+	ref.SignatureType, err = normalizeSignatureType(ref.SignatureType)
+	if err != nil {
+		return dynamicVolumeRef{}, true, err
+	}
 	return ref, true, nil
 }
 
@@ -210,6 +227,7 @@ func newOssClient(ref dynamicVolumeRef, credentials OssCredentials) (*minio.Clie
 		Creds:        minioCredentials.NewStaticV4(credentials.AccessKeyID, credentials.AccessKeySecret, ""),
 		Secure:       endpoint.Scheme == "https",
 		BucketLookup: bucketLookup,
+		Region:       ref.Region,
 	})
 }
 

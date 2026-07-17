@@ -48,6 +48,10 @@ func (n *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 			opts.AuthType = strings.ToLower(strings.TrimSpace(value))
 		} else if key == "addressingstyle" {
 			opts.AddressingStyle = strings.TrimSpace(value)
+		} else if key == "region" {
+			opts.Region = strings.TrimSpace(value)
+		} else if key == "signaturetype" {
+			opts.SignatureType = strings.TrimSpace(value)
 		}
 	}
 
@@ -167,6 +171,12 @@ func s3fsMountArgs(opts *PublishOptions, credentialFile string) []string {
 	}
 	if opts.AddressingStyle == "" || opts.AddressingStyle == ossAddressingStylePath {
 		args = append(args, "-o", "use_path_request_style")
+	}
+	if opts.Region != "" {
+		args = append(args, "-o", "region="+opts.Region)
+	}
+	if opts.SignatureType == ossSignatureTypeV2 {
+		args = append(args, "-o", "sigv2")
 	}
 	for _, option := range defaultS3fsOptions {
 		args = append(args, "-o", option)

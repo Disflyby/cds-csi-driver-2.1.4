@@ -61,6 +61,26 @@ func TestParseOssOptsRejectsUnsafeEndpointAndBucket(t *testing.T) {
 	}
 }
 
+func TestParseOssOptsRejectsBadSignatureType(t *testing.T) {
+	unsafeSig := &OssOpts{Bucket: "bucket-a", URL: "https://oss.example.test", SignatureType: "v3"}
+	if err := unsafeSig.parsOssOpts(); err == nil {
+		t.Fatal("expected unsupported signature type to be rejected")
+	}
+}
+
+func TestParseOssOptsAcceptsRegionAndSignature(t *testing.T) {
+	opts := &OssOpts{Bucket: "bucket-a", URL: "https://oss.example.test", Region: "cn-east-1", SignatureType: "v2"}
+	if err := opts.parsOssOpts(); err != nil {
+		t.Fatalf("parsOssOpts() error = %v", err)
+	}
+	if opts.Region != "cn-east-1" {
+		t.Fatalf("region = %q, want cn-east-1", opts.Region)
+	}
+	if opts.SignatureType != "v2" {
+		t.Fatalf("signature type = %q, want v2", opts.SignatureType)
+	}
+}
+
 func TestS3fsMountArgsPreserveArgumentBoundaries(t *testing.T) {
 	opts := &PublishOptions{OssOpts: OssOpts{Bucket: "bucket-a", URL: "https://oss.example.test", Path: "/prefix"}, NodePublishPath: "/target"}
 	args := s3fsMountArgs(opts, "/credentials/volume.passwd")
@@ -83,6 +103,23 @@ func TestS3fsMountArgsUseVirtualHostStyle(t *testing.T) {
 	args := s3fsMountArgs(opts, "/credentials/volume.passwd")
 	if containsMountOption(args, "use_path_request_style") {
 		t.Fatal("virtual-host-style mounts must not include use_path_request_style")
+	}
+}
+
+func TestS3fsMountArgsIncludeRegionAndSignature(t *testing.T) {
+	opts := &PublishOptions{OssOpts: OssOpts{
+		Bucket: "bucket-a", URL: "https://oss.example.test", Path: "/prefix",
+		Region: "cn-east-1", SignatureType: "v2",
+	}, NodePublishPath: "/target"}
+	if err := opts.parsOssOpts(); err != nil {
+		t.Fatal(err)
+	}
+	args := s3fsMountArgs(opts, "/credentials/volume.passwd")
+	if !containsMountOption(args, "region=cn-east-1") {
+		t.Fatal("mount args must include region")
+	}
+	if !containsMountOption(args, "sigv2") {
+		t.Fatal("mount args must include sigv2 for v2 signature")
 	}
 }
 

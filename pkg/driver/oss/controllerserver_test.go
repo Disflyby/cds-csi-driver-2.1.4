@@ -3,7 +3,7 @@ package oss
 import "testing"
 
 func TestDynamicVolumeIDRoundTrip(t *testing.T) {
-	want := dynamicVolumeRef{Bucket: "bucket-a", URL: "https://oss.example.test", Path: "/ai/csi-123", AddressingStyle: "virtual"}
+	want := dynamicVolumeRef{Bucket: "bucket-a", URL: "https://oss.example.test", Path: "/ai/csi-123", AddressingStyle: "virtual", Region: "cn-east-1", SignatureType: "v4"}
 	volumeID, err := encodeDynamicVolumeID(want)
 	if err != nil {
 		t.Fatalf("encodeDynamicVolumeID() error = %v", err)
@@ -68,6 +68,45 @@ func TestNewDynamicVolumeRefDefaultsToPathStyle(t *testing.T) {
 	}
 }
 
+func TestNewDynamicVolumeRefDefaultsSignatureType(t *testing.T) {
+	ref, err := newDynamicVolumeRef(map[string]string{"bucket": "bucket-a", "url": "https://oss.example.test"}, "pvc-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.SignatureType != defaultOSSSignatureType {
+		t.Fatalf("signature type = %q, want %q", ref.SignatureType, defaultOSSSignatureType)
+	}
+}
+
+func TestNewDynamicVolumeRefAcceptsRegionAndSignature(t *testing.T) {
+	ref, err := newDynamicVolumeRef(map[string]string{
+		"bucket":        "bucket-a",
+		"url":           "https://oss.example.test",
+		"region":        "cn-east-1",
+		"signatureType": "v2",
+	}, "pvc-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Region != "cn-east-1" {
+		t.Fatalf("region = %q, want cn-east-1", ref.Region)
+	}
+	if ref.SignatureType != ossSignatureTypeV2 {
+		t.Fatalf("signature type = %q, want v2", ref.SignatureType)
+	}
+}
+
+func TestNewDynamicVolumeRefRejectsBadSignatureType(t *testing.T) {
+	_, err := newDynamicVolumeRef(map[string]string{
+		"bucket":        "bucket-a",
+		"url":           "https://oss.example.test",
+		"signatureType": "v3",
+	}, "pvc-123")
+	if err == nil {
+		t.Fatal("expected bad signature type to be rejected")
+	}
+}
+
 func TestDecodeLegacyDynamicVolumeIDDefaultsToPathStyle(t *testing.T) {
 	volumeID, err := encodeDynamicVolumeID(dynamicVolumeRef{Bucket: "bucket-a", URL: "https://oss.example.test", Path: "/csi-legacy"})
 	if err != nil {
@@ -79,6 +118,9 @@ func TestDecodeLegacyDynamicVolumeIDDefaultsToPathStyle(t *testing.T) {
 	}
 	if ref.AddressingStyle != ossAddressingStylePath {
 		t.Fatalf("legacy addressing style = %q, want path", ref.AddressingStyle)
+	}
+	if ref.SignatureType != defaultOSSSignatureType {
+		t.Fatalf("legacy signature type = %q, want %q", ref.SignatureType, defaultOSSSignatureType)
 	}
 }
 

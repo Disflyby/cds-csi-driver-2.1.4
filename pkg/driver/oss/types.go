@@ -35,6 +35,8 @@ type OssOpts struct {
 	Path            string `json:"path"`
 	AuthType        string `json:"authType"`
 	AddressingStyle string `json:"addressingStyle"`
+	Region          string `json:"region"`
+	SignatureType   string `json:"signatureType"`
 }
 
 type PublishOptions struct {
