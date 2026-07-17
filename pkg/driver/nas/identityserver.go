@@ -13,7 +13,6 @@ var (
 
 	controllerCap = []csi.ControllerServiceCapability_RPC_Type{
 		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
-		csi.ControllerServiceCapability_RPC_PUBLISH_UNPUBLISH_VOLUME,
 	}
 )
 
@@ -24,3 +23,4 @@ func NewIdentityServer(d *NasDriver) *IdentityServer {
 		DefaultIdentityServer: csicommon.NewDefaultIdentityServer(d.csiDriver),
 	}
 }
+
