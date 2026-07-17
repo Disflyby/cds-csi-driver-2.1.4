@@ -13,16 +13,11 @@ var (
 	controllerCap = []csi.ControllerServiceCapability_RPC_Type{
 		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
 	}
-
-	nodeCap = []csi.NodeServiceCapability_RPC_Type{
-		csi.NodeServiceCapability_RPC_GET_VOLUME_STATS,
-	}
 )
 
 func NewIdentityServer(d *OssDriver) *IdentityServer {
 	d.csiDriver.AddVolumeCapabilityAccessModes(volumeCap)
 	d.csiDriver.AddControllerServiceCapabilities(controllerCap)
-	d.csiDriver.AddNodeServiceCapabilities(nodeCap)
 	return &IdentityServer{
 		DefaultIdentityServer: csicommon.NewDefaultIdentityServer(d.csiDriver),
 	}

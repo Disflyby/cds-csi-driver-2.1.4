@@ -205,28 +205,6 @@ func (n *NodeServer) NodeExpandVolume(context.Context, *csi.NodeExpandVolumeRequ
 	return nil, status.Error(codes.Unimplemented, "")
 }
 
-// NodeGetCapabilities returns the node service capabilities, including
-// GET_VOLUME_STATS for volume metrics and mount health monitoring.
-func (n *NodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
-	cap := &csi.NodeServiceCapability{
-		Type: &csi.NodeServiceCapability_Rpc{
-			Rpc: &csi.NodeServiceCapability_RPC{
-				Type: csi.NodeServiceCapability_RPC_GET_VOLUME_STATS,
-			},
-		},
-	}
-	return &csi.NodeGetCapabilitiesResponse{
-		Capabilities: []*csi.NodeServiceCapability{cap},
-	}, nil
-}
-
-// NodeGetVolumeStats reports volume usage metrics. This also serves as a
-// health check for the s3fs mount: if the s3fs process has died, statfs
-// will fail and kubelet will receive an error.
-func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
-	targetPath := req.GetVolumePath()
-	if targetPath == "" {
-		return nil, status.Error(codes.InvalidArgument, "NodeGetVolumeStats target path is empty")
-	}
-	return utils.GetMetrics(targetPath)
+func (n *NodeServer) NodeGetVolumeStats(context.Context, *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "OSS volumes do not support volume stats")
 }
