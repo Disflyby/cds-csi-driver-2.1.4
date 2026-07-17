@@ -340,7 +340,6 @@ func (opts *NfsOpts) createNasSubDirWithMarker(mountRoot, subDir, volumeID strin
 			return nil
 		}
 	}
-	fullPath := filepath.Join(localMountPath, subDir)
 	mounted, err := isMountPoint(localMountPath)
 	if err != nil {
 		return err
