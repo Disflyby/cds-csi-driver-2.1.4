@@ -55,6 +55,13 @@ func (n *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 		}
 	}
 
+	// Warn if credentials were passed via VolumeAttributes (static PV pattern).
+	// Dynamic volumes receive credentials through NodePublishSecretRef; static PVs
+	// should migrate AK/SK to a Secret referenced by NodePublishSecretRef.
+	if opts.AkID != "" || opts.AkSecret != "" {
+		log.Warnf("NodePublishVolume: OSS credentials found in VolumeAttributes for volume %s — consider migrating to a Kubernetes Secret", req.VolumeId)
+	}
+
 	// Dynamic volumes receive credentials through NodePublishSecretRef. Keep the
 	// volume-context fallback so existing static PVs continue to work unchanged.
 	credentials := credentialsFromValues(req.GetSecrets())
@@ -196,4 +203,30 @@ func (n *NodeServer) NodeUnstageVolume(context.Context, *csi.NodeUnstageVolumeRe
 
 func (n *NodeServer) NodeExpandVolume(context.Context, *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "")
+}
+
+// NodeGetCapabilities returns the node service capabilities, including
+// GET_VOLUME_STATS for volume metrics and mount health monitoring.
+func (n *NodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
+	cap := &csi.NodeServiceCapability{
+		Type: &csi.NodeServiceCapability_Rpc{
+			Rpc: &csi.NodeServiceCapability_RPC{
+				Type: csi.NodeServiceCapability_RPC_GET_VOLUME_STATS,
+			},
+		},
+	}
+	return &csi.NodeGetCapabilitiesResponse{
+		Capabilities: []*csi.NodeServiceCapability{cap},
+	}, nil
+}
+
+// NodeGetVolumeStats reports volume usage metrics. This also serves as a
+// health check for the s3fs mount: if the s3fs process has died, statfs
+// will fail and kubelet will receive an error.
+func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
+	targetPath := req.GetVolumePath()
+	if targetPath == "" {
+		return nil, status.Error(codes.InvalidArgument, "NodeGetVolumeStats target path is empty")
+	}
+	return utils.GetMetrics(targetPath)
 }
