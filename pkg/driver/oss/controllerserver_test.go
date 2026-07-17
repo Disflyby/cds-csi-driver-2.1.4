@@ -3,7 +3,7 @@ package oss
 import "testing"
 
 func TestDynamicVolumeIDRoundTrip(t *testing.T) {
-	want := dynamicVolumeRef{Bucket: "bucket-a", URL: "https://oss.example.test", Path: "/ai/csi-123"}
+	want := dynamicVolumeRef{Bucket: "bucket-a", URL: "https://oss.example.test", Path: "/ai/csi-123", AddressingStyle: "virtual"}
 	volumeID, err := encodeDynamicVolumeID(want)
 	if err != nil {
 		t.Fatalf("encodeDynamicVolumeID() error = %v", err)
@@ -19,9 +19,10 @@ func TestDynamicVolumeIDRoundTrip(t *testing.T) {
 
 func TestNewDynamicVolumeRefUsesStableScopedPath(t *testing.T) {
 	parameters := map[string]string{
-		"bucket": "bucket-a",
-		"url":    "https://oss.example.test",
-		"path":   "/team-a/",
+		"bucket":          "bucket-a",
+		"url":             "https://oss.example.test",
+		"path":            "/team-a/",
+		"addressingStyle": "virtual",
 	}
 	first, err := newDynamicVolumeRef(parameters, "pvc-123")
 	if err != nil {
@@ -33,6 +34,9 @@ func TestNewDynamicVolumeRefUsesStableScopedPath(t *testing.T) {
 	}
 	if first.Path != second.Path || first.Path == "/team-a" {
 		t.Fatalf("dynamic path must be deterministic and scoped: %q, %q", first.Path, second.Path)
+	}
+	if first.AddressingStyle != ossAddressingStyleVirtual {
+		t.Fatalf("addressing style = %q, want virtual", first.AddressingStyle)
 	}
 }
 
@@ -48,9 +52,33 @@ func TestNewDynamicVolumeRefRejectsParentPath(t *testing.T) {
 }
 
 func TestNewOssClientRejectsUnexpectedURLParts(t *testing.T) {
-	_, err := newOssClient("https://oss.example.test?region=cn", OssCredentials{AccessKeyID: "id", AccessKeySecret: "secret"})
+	_, err := newOssClient(dynamicVolumeRef{URL: "https://oss.example.test?region=cn", AddressingStyle: ossAddressingStylePath}, OssCredentials{AccessKeyID: "id", AccessKeySecret: "secret"})
 	if err == nil {
 		t.Fatal("expected endpoint query to be rejected")
+	}
+}
+
+func TestNewDynamicVolumeRefDefaultsToPathStyle(t *testing.T) {
+	ref, err := newDynamicVolumeRef(map[string]string{"bucket": "bucket-a", "url": "https://oss.example.test"}, "pvc-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.AddressingStyle != ossAddressingStylePath {
+		t.Fatalf("addressing style = %q, want path", ref.AddressingStyle)
+	}
+}
+
+func TestDecodeLegacyDynamicVolumeIDDefaultsToPathStyle(t *testing.T) {
+	volumeID, err := encodeDynamicVolumeID(dynamicVolumeRef{Bucket: "bucket-a", URL: "https://oss.example.test", Path: "/csi-legacy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, dynamic, err := decodeDynamicVolumeID(volumeID)
+	if err != nil || !dynamic {
+		t.Fatalf("decode legacy volume ID: dynamic=%t err=%v", dynamic, err)
+	}
+	if ref.AddressingStyle != ossAddressingStylePath {
+		t.Fatalf("legacy addressing style = %q, want path", ref.AddressingStyle)
 	}
 }
 

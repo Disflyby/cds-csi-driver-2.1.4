@@ -20,9 +20,10 @@ import (
 )
 
 type dynamicVolumeRef struct {
-	Bucket string `json:"bucket"`
-	URL    string `json:"url"`
-	Path   string `json:"path"`
+	Bucket          string `json:"bucket"`
+	URL             string `json:"url"`
+	Path            string `json:"path"`
+	AddressingStyle string `json:"addressingStyle,omitempty"`
 }
 
 func NewControllerServer(d *OssDriver) *ControllerServer {
@@ -53,7 +54,7 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		return nil, status.Error(codes.InvalidArgument, "OSS credentials are required through the provisioner secret")
 	}
 
-	client, err := newOssClient(ref.URL, credentials)
+	client, err := newOssClient(ref, credentials)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -74,9 +75,10 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		VolumeId:      volumeID,
 		CapacityBytes: capacityBytes,
 		VolumeContext: map[string]string{
-			"bucket": ref.Bucket,
-			"url":    ref.URL,
-			"path":   ref.Path,
+			"bucket":          ref.Bucket,
+			"url":             ref.URL,
+			"path":            ref.Path,
+			"addressingStyle": ref.AddressingStyle,
 		},
 	}}, nil
 }
@@ -98,7 +100,7 @@ func (c *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolu
 	if !credentials.valid() {
 		return nil, status.Error(codes.InvalidArgument, "OSS credentials are required through the provisioner secret")
 	}
-	client, err := newOssClient(ref.URL, credentials)
+	client, err := newOssClient(ref, credentials)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -133,6 +135,8 @@ func newDynamicVolumeRef(parameters map[string]string, volumeName string) (dynam
 			ref.URL = strings.TrimSpace(value)
 		case "path":
 			ref.Path = strings.TrimSpace(value)
+		case "addressingstyle":
+			ref.AddressingStyle = strings.TrimSpace(value)
 		}
 	}
 	if ref.Bucket == "" || ref.URL == "" {
@@ -141,6 +145,11 @@ func newDynamicVolumeRef(parameters map[string]string, volumeName string) (dynam
 	if ref.Path == "" {
 		ref.Path = defaultOssRoot
 	}
+	addressingStyle, err := normalizeAddressingStyle(ref.AddressingStyle)
+	if err != nil {
+		return ref, err
+	}
+	ref.AddressingStyle = addressingStyle
 	for _, segment := range strings.Split(strings.Trim(ref.Path, "/"), "/") {
 		if segment == ".." {
 			return ref, fmt.Errorf("StorageClass parameter path must not contain ..")
@@ -175,11 +184,15 @@ func decodeDynamicVolumeID(volumeID string) (dynamicVolumeRef, bool, error) {
 	if ref.Bucket == "" || ref.URL == "" || !strings.HasPrefix(pathpkg.Base(ref.Path), "csi-") {
 		return dynamicVolumeRef{}, true, fmt.Errorf("invalid dynamic OSS volume ID")
 	}
+	ref.AddressingStyle, err = normalizeAddressingStyle(ref.AddressingStyle)
+	if err != nil {
+		return dynamicVolumeRef{}, true, err
+	}
 	return ref, true, nil
 }
 
-func newOssClient(rawURL string, credentials OssCredentials) (*minio.Client, error) {
-	endpoint, err := url.Parse(rawURL)
+func newOssClient(ref dynamicVolumeRef, credentials OssCredentials) (*minio.Client, error) {
+	endpoint, err := url.Parse(ref.URL)
 	if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
 		return nil, fmt.Errorf("invalid OSS endpoint URL")
 	}
@@ -189,10 +202,14 @@ func newOssClient(rawURL string, credentials OssCredentials) (*minio.Client, err
 	if endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
 		return nil, fmt.Errorf("OSS endpoint URL must not contain credentials, a query, or a fragment")
 	}
+	bucketLookup := minio.BucketLookupPath
+	if ref.AddressingStyle == ossAddressingStyleVirtual {
+		bucketLookup = minio.BucketLookupDNS
+	}
 	return minio.New(endpoint.Host, &minio.Options{
 		Creds:        minioCredentials.NewStaticV4(credentials.AccessKeyID, credentials.AccessKeySecret, ""),
 		Secure:       endpoint.Scheme == "https",
-		BucketLookup: minio.BucketLookupPath,
+		BucketLookup: bucketLookup,
 	})
 }
 

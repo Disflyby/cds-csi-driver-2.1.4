@@ -46,6 +46,8 @@ func (n *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 			opts.AkSecret = strings.TrimSpace(value)
 		} else if key == "authtype" {
 			opts.AuthType = strings.ToLower(strings.TrimSpace(value))
+		} else if key == "addressingstyle" {
+			opts.AddressingStyle = strings.TrimSpace(value)
 		}
 	}
 
@@ -162,6 +164,9 @@ func s3fsMountArgs(opts *PublishOptions, credentialFile string) []string {
 		opts.NodePublishPath,
 		"-o", "passwd_file=" + credentialFile,
 		"-o", "url=" + opts.URL,
+	}
+	if opts.AddressingStyle == "" || opts.AddressingStyle == ossAddressingStylePath {
+		args = append(args, "-o", "use_path_request_style")
 	}
 	for _, option := range defaultS3fsOptions {
 		args = append(args, "-o", option)

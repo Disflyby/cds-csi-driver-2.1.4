@@ -33,6 +33,11 @@ func (opts *OssOpts) parsOssOpts() error {
 		return errors.New("invalid OSS bucket name")
 	}
 	opts.URL = strings.TrimSuffix(endpoint.String(), "/")
+	addressingStyle, err := normalizeAddressingStyle(opts.AddressingStyle)
+	if err != nil {
+		return err
+	}
+	opts.AddressingStyle = addressingStyle
 
 	if opts.Path == "" {
 		log.Warnf("oss, path is empty, using default root %s", defaultOssRoot)
@@ -53,6 +58,17 @@ func (opts *OssOpts) parsOssOpts() error {
 		opts.Path = opts.Path[0 : len(opts.Path)-1]
 	}
 	return nil
+}
+
+func normalizeAddressingStyle(value string) (string, error) {
+	style := strings.ToLower(strings.TrimSpace(value))
+	if style == "" {
+		return defaultOSSAddressingStyle, nil
+	}
+	if style != ossAddressingStylePath && style != ossAddressingStyleVirtual {
+		return "", errors.New("OSS addressingStyle must be path or virtual")
+	}
+	return style, nil
 }
 
 func isValidBucket(bucket string) bool {

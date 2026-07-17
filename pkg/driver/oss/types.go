@@ -27,13 +27,14 @@ type IdentityServer struct {
 }
 
 type OssOpts struct {
-	Bucket    string `json:"bucket"`
-	URL       string `json:"url"`
-	OtherOpts string `json:"otherOpts"`
-	AkID      string `json:"akId"`
-	AkSecret  string `json:"akSecret"`
-	Path      string `json:"path"`
-	AuthType  string `json:"authType"`
+	Bucket          string `json:"bucket"`
+	URL             string `json:"url"`
+	OtherOpts       string `json:"otherOpts"`
+	AkID            string `json:"akId"`
+	AkSecret        string `json:"akSecret"`
+	Path            string `json:"path"`
+	AuthType        string `json:"authType"`
+	AddressingStyle string `json:"addressingStyle"`
 }
 
 type PublishOptions struct {

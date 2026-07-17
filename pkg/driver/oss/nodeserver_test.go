@@ -55,6 +55,10 @@ func TestParseOssOptsRejectsUnsafeEndpointAndBucket(t *testing.T) {
 	if err := unsafeBucket.parsOssOpts(); err == nil {
 		t.Fatal("expected unsafe bucket name to be rejected")
 	}
+	unsafeStyle := &OssOpts{Bucket: "bucket-a", URL: "https://oss.example.test", AddressingStyle: "other"}
+	if err := unsafeStyle.parsOssOpts(); err == nil {
+		t.Fatal("expected unsupported addressing style to be rejected")
+	}
 }
 
 func TestS3fsMountArgsPreserveArgumentBoundaries(t *testing.T) {
@@ -66,4 +70,27 @@ func TestS3fsMountArgsPreserveArgumentBoundaries(t *testing.T) {
 			t.Fatalf("args[%d] = %q, want %q", index, args[index], value)
 		}
 	}
+	if !containsMountOption(args, "use_path_request_style") {
+		t.Fatal("path-style mounts must include use_path_request_style")
+	}
+}
+
+func TestS3fsMountArgsUseVirtualHostStyle(t *testing.T) {
+	opts := &PublishOptions{OssOpts: OssOpts{Bucket: "bucket-a", URL: "https://oss.example.test", Path: "/prefix", AddressingStyle: "virtual"}, NodePublishPath: "/target"}
+	if err := opts.parsOssOpts(); err != nil {
+		t.Fatal(err)
+	}
+	args := s3fsMountArgs(opts, "/credentials/volume.passwd")
+	if containsMountOption(args, "use_path_request_style") {
+		t.Fatal("virtual-host-style mounts must not include use_path_request_style")
+	}
+}
+
+func containsMountOption(args []string, option string) bool {
+	for _, arg := range args {
+		if arg == option {
+			return true
+		}
+	}
+	return false
 }
