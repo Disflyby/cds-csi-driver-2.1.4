@@ -392,7 +392,7 @@ Kindly Remind:
     - 
       name: ADDRESS
       value: /socketDir/csi.sock
-  image: "registry-bj.capitalonline.net/cck/csi-provisioner:v1.5.0"
+  image: "harbor-dev.yun-paas.com/csi_agent/csi-provisioner:v3.1.0"
   name: csi-provisioner
   volumeMounts: 
     - 

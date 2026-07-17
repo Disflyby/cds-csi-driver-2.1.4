@@ -53,6 +53,14 @@ rules:
   - list
   - watch
 - apiGroups:
+  - storage.k8s.io
+  resources:
+  - volumeattachments
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - ""
   resources:
   - events
@@ -193,7 +201,7 @@ spec:
         env:
         - name: ADDRESS
           value: /socketDir/csi.sock
-        image: harbor-dev.yun-paas.com/csi_agent/csi-provisioner:v1.5.0
+        image: harbor-dev.yun-paas.com/csi_agent/csi-provisioner:v3.1.0
         name: csi-provisioner
         volumeMounts:
         - mountPath: /socketDir

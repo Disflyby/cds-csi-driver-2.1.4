@@ -78,7 +78,7 @@ spec:
             successThreshold: 1
             timeoutSeconds: 15
         - name: csi-provisioner
-          image: registry-bj.capitalonline.net/cck/csi-provisioner:v1.5.0
+          image: harbor-dev.yun-paas.com/csi_agent/csi-provisioner:v3.1.0
           args:
             - "--csi-address=$(ADDRESS)"
             - "--v=5"
