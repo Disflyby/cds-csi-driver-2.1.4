@@ -13,8 +13,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	core "k8s.io/api/core/v1"
 	storage "k8s.io/api/storage/v1"
-
-	cdsNas "github.com/capitalonline/cck-sdk-go/pkg/cck"
 )
 
 func (opts *NfsOpts) parsNfsOpts() error {
@@ -221,11 +219,6 @@ func newVolumeCreateSubpathOptions(param map[string]string) *VolumeCreateSubpath
 	opts.Options = param["options"]
 	opts.Mode = param["mode"]
 	opts.ModeType = param["modeType"]
-	if param["threshold"] == "" {
-		opts.Threshold = defaultNasUsage
-	} else {
-		opts.Threshold = param["threshold"]
-	}
 
 	return opts
 }
@@ -361,22 +354,6 @@ func (opts *NfsOpts) createNasSubDirWithMarker(mountRoot, subDir, volumeID strin
 	if err := mountNFS(opts.Server, opts.Path, localMountPath, opts.Vers, opts.Options, false); err != nil {
 		return err
 	}
-	if volumeID != "" {
-		exists, err := volumeMarkerExists(fullPath, volumeID)
-		if err != nil {
-			return err
-		}
-		_, statErr := os.Stat(fullPath)
-		directoryAlreadyExists := statErr == nil
-		if statErr != nil && !os.IsNotExist(statErr) {
-			return fmt.Errorf("stat dynamic NFS path %s: %w", fullPath, statErr)
-		}
-		if !exists && !directoryAlreadyExists {
-			if err := opts.ensureServerCapacity(); err != nil {
-				return err
-			}
-		}
-	}
 	if err := utils.CreateDir(fullPath, mountPointMode); err != nil {
 		return fmt.Errorf("nas, create sub directory: %w", err)
 	}
@@ -415,28 +392,6 @@ func parseConfiguredNFSServers(serverList []string) ([]*NfsServer, error) {
 		servers = append(servers, &NfsServer{Address: address, Path: path})
 	}
 	return servers, nil
-}
-
-func (opts *NfsOpts) ensureServerCapacity() error {
-	threshold, err := normalizeUsageThreshold(opts.Threshold)
-	if err != nil {
-		return err
-	}
-	res, err := cdsNas.DescribeNasUsage(os.Getenv(defaultClusterID), opts.Server)
-	if err != nil {
-		return fmt.Errorf("query NFS usage for %s: %w", opts.Server, err)
-	}
-	if res == nil || len(res.Data.NasInfo) == 0 {
-		return fmt.Errorf("NFS usage response for %s is empty", opts.Server)
-	}
-	usage, err := strconv.ParseFloat(strings.TrimSuffix(res.Data.NasInfo[0].UsageRate, "%"), 64)
-	if err != nil {
-		return fmt.Errorf("parse NFS usage for %s: %w", opts.Server, err)
-	}
-	if usage >= threshold {
-		return fmt.Errorf("NFS server %s usage %.2f%% exceeds threshold %.2f%%", opts.Server, usage, threshold)
-	}
-	return nil
 }
 
 func deleteNasFilesystemSubDir(mountRoot, subDir, fileSystemNasIP string) (retErr error) {

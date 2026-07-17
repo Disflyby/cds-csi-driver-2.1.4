@@ -16,6 +16,4 @@ const (
 	fileSystemLiteral = "filesystem"
 	defaultNfsVersion = "4.0"
 	defaultDeleteNas  = "false"
-	defaultNasUsage   = "1"
-	defaultClusterID  = "CDS_CLUSTER_ID"
 )

@@ -32,15 +32,14 @@ type IdentityServer struct {
 }
 
 type NfsOpts struct {
-	Servers   string
-	Server    string
-	Path      string
-	Vers      string
-	Mode      string
-	ModeType  string
-	Options   string
-	VolumeAs  string
-	Threshold string
+	Servers  string
+	Server   string
+	Path     string
+	Vers     string
+	Mode     string
+	ModeType string
+	Options  string
+	VolumeAs string
 }
 
 type PublishOptions struct {

@@ -144,26 +144,6 @@ func TestDeterministicServerSelection(t *testing.T) {
 	}
 }
 
-func TestUsageThresholdNormalization(t *testing.T) {
-	tests := []struct {
-		value string
-		want  float64
-	}{
-		{"0.9", 90},
-		{"90", 90},
-		{"1", 100},
-	}
-	for _, test := range tests {
-		got, err := normalizeUsageThreshold(test.value)
-		if err != nil || got != test.want {
-			t.Fatalf("normalizeUsageThreshold(%q) = (%v, %v), want (%v, nil)", test.value, got, err, test.want)
-		}
-	}
-	if _, err := normalizeUsageThreshold("101"); err == nil {
-		t.Fatal("normalizeUsageThreshold(101) error = nil")
-	}
-}
-
 func TestDeleteNFSSubpathRejectsInvalidPathBeforeMount(t *testing.T) {
 	if err := deleteNFSSubpath("nfs.example", "/nfsshare/../etc", "4.0", t.TempDir(), "pvc-123", false); err == nil {
 		t.Fatal("deleteNFSSubpath() error = nil for a traversal path")

@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -204,17 +203,6 @@ func selectDeterministicNfsServer(servers []*NfsServer, volumeID string) *NfsSer
 	hash := fnv.New32a()
 	_, _ = hash.Write([]byte(volumeID))
 	return servers[int(hash.Sum32()%uint32(len(servers)))]
-}
-
-func normalizeUsageThreshold(value string) (float64, error) {
-	threshold, err := strconv.ParseFloat(value, 64)
-	if err != nil || threshold < 0 || threshold > 100 {
-		return 0, fmt.Errorf("threshold must be a number in [0, 1] or [0, 100], got %q", value)
-	}
-	if threshold <= 1 {
-		threshold *= 100
-	}
-	return threshold, nil
 }
 
 func deleteNFSSubpath(server, pvPath, vers, mountRoot, volumeID string, archiveOnDelete bool) (retErr error) {

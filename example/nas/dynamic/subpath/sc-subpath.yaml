@@ -9,7 +9,6 @@ parameters:
   server: "replace-with-nfs-server"
   path: "/"
   vers: "4.0"
-  threshold: "90"
   options: noresvport
   archiveOnDelete: "true"
 reclaimPolicy: Delete
