@@ -22,8 +22,8 @@ import (
 
 var (
 	// stores the processed pvc: key - pvname, value - *csi.Volume
-	processedPvc sync.Map
-	subpathCreateLocks     = struct {
+	processedPvc       sync.Map
+	subpathCreateLocks = struct {
 		sync.Mutex
 		locks map[string]*volumeCreateLock
 	}{locks: make(map[string]*volumeCreateLock)}
@@ -156,17 +156,16 @@ func (c *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolu
 	pv, err := c.Client.CoreV1().PersistentVolumes().Get(req.VolumeId, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			log.Warnf("DeleteVolume: PV %s not found and volume ID is not dynamic — NFS subdirectory may be orphaned", req.VolumeId)
+			log.Warnf("DeleteVolume: PV %s not found and volume ID is not dynamic - NFS subdirectory may be orphaned", req.VolumeId)
 			return &csi.DeleteVolumeResponse{}, nil
 		}
 		return nil, fmt.Errorf("DeleteVolume:: nas, get Volume: %s from cluster error: %s", req.VolumeId, err.Error())
 	}
 
-	// check pv's plug-in, must be not empty
+	// check pv plug-in, must be not empty
 	if pv.Spec.CSI == nil {
 		return nil, fmt.Errorf("DeleteVolume:: Nas, Volume Spec with CSI empty: %s, pv: %v", req.VolumeId, pv)
 	}
-	// get pv's volumeAs, default is subpath
 	var volumeAs string
 	if value, ok := pv.Spec.CSI.VolumeAttributes["volumeAs"]; !ok {
 		volumeAs = subpathLiteral
@@ -175,7 +174,6 @@ func (c *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolu
 	}
 	log.Debugf("DeleteVolume: Nas, volumeAs is: %s", volumeAs)
 
-	// subpath
 	if volumeAs == subpathLiteral {
 		if pv.Spec.StorageClassName == "" {
 			return nil, status.Errorf(codes.InvalidArgument, "volume %s has no storage class", req.VolumeId)
@@ -193,6 +191,8 @@ func (c *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolu
 		log.Infof("DeleteVolume:: volume %s has been deleted successfully", req.VolumeId)
 	}
 
+	return &csi.DeleteVolumeResponse{}, nil
+}
 
 func (c ControllerServer) ValidateVolumeCapabilities(ctx context.Context, req *csi.ValidateVolumeCapabilitiesRequest) (*csi.ValidateVolumeCapabilitiesResponse, error) {
 	for _, capability := range req.VolumeCapabilities {
@@ -238,4 +238,3 @@ func decodeNasDynamicVolumeID(volumeID string) (nasDynamicVolumeRef, bool, error
 	}
 	return ref, true, nil
 }
-

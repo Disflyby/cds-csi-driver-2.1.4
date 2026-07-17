@@ -63,8 +63,7 @@ type DeleteVolumeSubpathOptions struct {
 }
 
 type nasDynamicVolumeRef struct {
-	Server  string `json:"server"`
-	Path    string `json:"path"`
-	Vers    string `json:"vers"`
-
+	Server string `json:"server"`
+	Path   string `json:"path"`
+	Vers   string `json:"vers"`
 }

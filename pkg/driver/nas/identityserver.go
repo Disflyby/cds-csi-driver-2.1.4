@@ -23,4 +23,3 @@ func NewIdentityServer(d *NasDriver) *IdentityServer {
 		DefaultIdentityServer: csicommon.NewDefaultIdentityServer(d.csiDriver),
 	}
 }
-
