@@ -171,7 +171,7 @@ func parsePublishOptions(req *csi.NodePublishVolumeRequest) (*PublishOptions, er
 	if opts.Server == "" {
 		return nil, errors.New("host is empty, should input nas domain")
 	}
-	if opts.VolumeAs != subpathLiteral && opts.VolumeAs != fileSystemLiteral {
+	if opts.VolumeAs != subpathLiteral {
 		return nil, fmt.Errorf("unsupported volumeAs %q", opts.VolumeAs)
 	}
 
@@ -284,8 +284,6 @@ func mountNasVolume(opts *PublishOptions, volumeId string) error {
 		} else {
 			serverMountPoint = filepath.Join(opts.Path, volumeId)
 		}
-	} else if opts.VolumeAs == fileSystemLiteral {
-		serverMountPoint = opts.Path
 	} else {
 		return fmt.Errorf("unsupported volumeAs %q", opts.VolumeAs)
 	}
@@ -403,39 +401,6 @@ func parseConfiguredNFSServers(serverList []string) ([]*NfsServer, error) {
 		servers = append(servers, &NfsServer{Address: address, Path: path})
 	}
 	return servers, nil
-}
-
-func deleteNasFilesystemSubDir(mountRoot, subDir, fileSystemNasIP string) (retErr error) {
-	mounted, err := isMountPoint(mountRoot)
-	if err != nil {
-		return err
-	}
-	if mounted {
-		if err := unmountNFS(mountRoot); err != nil {
-			return fmt.Errorf("unmount existing temporary path %s: %w", mountRoot, err)
-		}
-	}
-	if err := utils.CreateDir(mountRoot, mountPointMode); err != nil {
-		return fmt.Errorf("create temporary mount path %s: %w", mountRoot, err)
-	}
-	defer func() {
-		isMounted, err := isMountPoint(mountRoot)
-		if err == nil && isMounted {
-			if err := unmountNFS(mountRoot); err != nil && retErr == nil {
-				retErr = fmt.Errorf("unmount temporary path %s: %w", mountRoot, err)
-			}
-		}
-		removeMountPoint(mountRoot)
-	}()
-
-	if err := mountNFS(fileSystemNasIP, defaultNFSRoot, mountRoot, defaultNfsVersion, defaultV4Opts, false); err != nil {
-		return err
-	}
-	deleteDir := filepath.Join(mountRoot, strings.TrimPrefix(subDir, defaultNFSRoot))
-	if err := os.RemoveAll(deleteDir); err != nil {
-		return fmt.Errorf("delete NFS path %s: %w", deleteDir, err)
-	}
-	return nil
 }
 
 func changeNasMode(opts *PublishOptions) error {

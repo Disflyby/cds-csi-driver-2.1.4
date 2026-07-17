@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"time"
 
-	cdsNas "github.com/capitalonline/cck-sdk-go/pkg/cck"
 	"github.com/capitalonline/cds-csi-driver/pkg/driver/utils"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/kubernetes-csi/drivers/pkg/csi-common"
@@ -25,8 +23,6 @@ import (
 var (
 	// stores the processed pvc: key - pvname, value - *csi.Volume
 	processedPvc sync.Map
-	// guards repeat deletion requests for a historical filesystem PV.
-	pvcFileSystemDeleteMap sync.Map
 	subpathCreateLocks     = struct {
 		sync.Mutex
 		locks map[string]*volumeCreateLock
@@ -96,9 +92,6 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 	volumeAs, ok := volOptions["volumeAs"]
 	if !ok {
 		volumeAs = subpathLiteral
-	}
-	if volumeAs == fileSystemLiteral {
-		return nil, status.Error(codes.Unimplemented, "dynamic NFS volumeAs=filesystem is disabled; use volumeAs=subpath")
 	}
 	if volumeAs != subpathLiteral {
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported volumeAs %q", volumeAs)
@@ -200,115 +193,6 @@ func (c *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolu
 		log.Infof("DeleteVolume:: volume %s has been deleted successfully", req.VolumeId)
 	}
 
-	// filesystem
-	if volumeAs == fileSystemLiteral {
-		// check pv path, should be not the nfs root
-		var mountTargetPath string
-		// check delete Nas storage
-		// when deleteNas is "true", delete Nas storage; when deleteNas is "false", skip to retain nas storage(all sc and pv)
-		var deleteNasResult string
-
-		log.Infof("DeleteVolume: volumeAs is %s", volumeAs)
-		log.Debugf("DeleteVolume: Nas, volume attrs: %v", pv.Spec.CSI.VolumeAttributes)
-
-		// step0: get deleteVolume
-		if value, ok := pv.Spec.CSI.VolumeAttributes["deleteNas"]; ok {
-			deleteNasResult = value
-			log.Debugf("DeleteVolume: deleteNasResult is: %s", deleteNasResult)
-		} else {
-			deleteNasResult = defaultDeleteNas
-			log.Debugf("DeleteVolume: deleteNasResult is [empty], use default: %v", defaultDeleteNas)
-		}
-
-		//  delete nas and filesystem
-		if deleteNasResult == "true" {
-			log.Infof("DeleteVolume: Nas volume(%s) Filesystem's deleteVolume is [true], will delete nas storage and pv data", req.VolumeId)
-
-			// step1: get nas uid
-			var fileSystemNasID string
-			if value, ok := pv.Spec.CSI.VolumeAttributes["nasId"]; ok {
-				fileSystemNasID = value
-				log.Debugf("DeleteVolume: nasID is:%s", fileSystemNasID)
-			} else {
-				log.Errorf("DeleteVolume: nasID is empty, CSI is: %v", pv.Spec.CSI)
-				utils.SentrySendError(fmt.Errorf("DeleteVolume: nasID is empty, CSI is: %v", pv.Spec.CSI))
-				return nil, fmt.Errorf("DeleteVolume: nasID is empty, CSI is: %v", pv.Spec.CSI)
-			}
-
-			// step2: get nas server ip
-			var fileSystemNasIP string
-			if value, ok := pv.Spec.CSI.VolumeAttributes["server"]; ok {
-				fileSystemNasIP = value
-				log.Debugf("DeleteVolume: nas, server is: %s", fileSystemNasIP)
-			} else {
-				log.Errorf("DeleteVolume: nas server is empty, CSI is: %v", pv.Spec.CSI)
-				utils.SentrySendError(fmt.Errorf("DeleteVolume: nas server is empty, CSI is: %v", pv.Spec.CSI))
-				return nil, fmt.Errorf("DeleteVolume: nas server is empty, CSI is: %v", pv.Spec.CSI)
-			}
-
-			// check pv path
-			if value, ok := pv.Spec.CSI.VolumeAttributes["path"]; ok {
-				mountTargetPath = value
-				log.Debugf("DeleteVolume: nas, path is: %s", mountTargetPath)
-			} else {
-				log.Errorf("DeleteVolume: path is empty, CSI is: %v", pv.Spec.CSI)
-				utils.SentrySendError(fmt.Errorf("DeleteVolume: path is empty, CSI is: %v", pv.Spec.CSI))
-				return nil, fmt.Errorf("DeleteVolume: path is empty, CSI is: %v", pv.Spec.CSI)
-			}
-
-			// step3: delete pv data in NAS storage
-			if err := deleteNasFilesystemSubDir(deleteVolumeRoot, mountTargetPath, fileSystemNasIP); err != nil {
-				return nil, fmt.Errorf("DeleteVolume: nas, failed to delete mountTargetPath on the nas server, error is: %s", err.Error())
-			}
-			log.Debugf("DeleteVolume: nas, delete pv path succeed in NAS storage")
-
-			// step4: Unmount NAS storage from cluster
-			unMountNasRes, err := cdsNas.UnMountNas(fileSystemNasID)
-			if err != nil {
-				log.Errorf("DeleteVolume: cdsNas.UnMountNas api error, err is: %s", err)
-				utils.SentrySendError(fmt.Errorf("DeleteVolume: cdsNas.UnMountNas api error, err is: %s", err))
-				return nil, fmt.Errorf("DeleteVolume: cdsNas.UnMountNas api error: %w", err)
-			}
-
-			// get unmount task status
-			unMountNasTaskID := unMountNasRes.TaskID
-			log.Debugf("DeleteVolume: cdsNas.UnMountNas, taskID is:%s", unMountNasTaskID)
-
-			err = describeTaskStatus(unMountNasTaskID)
-
-			if err != nil {
-				log.Errorf("DeleteVolume: describeTaskStatus error, err is: %s", err.Error())
-				utils.SentrySendError(fmt.Errorf("DeleteVolume: describeTaskStatus error, err is: %s", err.Error()))
-				return nil, fmt.Errorf("CreateVolume: describeTaskStatus error, err is: %s", err.Error())
-			}
-			log.Infof("DeleteVolume: UnMountNas NAS storage succeed")
-
-			// step5: delete NAS storage
-			_, err = cdsNas.DeleteNas(fileSystemNasID)
-
-			if err != nil {
-				log.Errorf("DeleteVolume: cdsNas.DeleteNas api error, err is: %s", err)
-				utils.SentrySendError(fmt.Errorf("DeleteVolume: cdsNas.DeleteNas api error, err is: %s", err))
-				return nil, fmt.Errorf("DeleteVolume:cdsNas.DeleteNas api error, err is: %s", err)
-			}
-
-			log.Infof("DeleteVolume: delete NAS storage succeed!")
-
-			// step6: clean the historical filesystem deletion state
-			processedPvc.Delete(req.VolumeId)
-			pvcFileSystemDeleteMap.Store(fileSystemNasID, "ok")
-			log.Debugf("clean processedPvc and pvcFileSystemDeleteMap record")
-
-			// step7: response
-			log.Infof("DeleteVolume:: Nas volume(%s)'s NAS storage and mountTargetPath have been deleted successfully", req.VolumeId)
-		} else {
-			// retain pv's filesystem NAS storage
-			log.Warnf("DeleteVolume: Nas volume(%s) Filesystem's deleteVolume is [false], remain nas storage and pv data", req.VolumeId)
-		}
-	}
-
-	return &csi.DeleteVolumeResponse{}, nil
-}
 
 func (c ControllerServer) ValidateVolumeCapabilities(ctx context.Context, req *csi.ValidateVolumeCapabilitiesRequest) (*csi.ValidateVolumeCapabilitiesResponse, error) {
 	for _, capability := range req.VolumeCapabilities {
@@ -355,31 +239,3 @@ func decodeNasDynamicVolumeID(volumeID string) (nasDynamicVolumeRef, bool, error
 	return ref, true, nil
 }
 
-func describeTaskStatus(taskID string) error {
-
-	log.Debugf("describeTaskStatus: taskID is: %s", taskID)
-
-	for i := 1; i < 120; i++ {
-
-		res, err := cdsNas.DescribeTaskStatus(taskID)
-
-		if err != nil {
-			log.Errorf("describeTaskStatus: cdsNas.DescribeTaskStatus api error, err is: %s", err)
-			utils.SentrySendError(fmt.Errorf("describeTaskStatus: cdsNas.DescribeTaskStatus api error, err is: %s", err))
-			return fmt.Errorf("apiError")
-		}
-
-		if res.Data.Status == "finish" {
-			log.Debugf("describeTaskStatus: task succeed")
-			return nil
-		} else if res.Data.Status == "doing" {
-			log.Debugf("describeTaskStatus: task:%s is running, sleep 10s", taskID)
-			time.Sleep(10 * time.Second)
-		} else if res.Data.Status == "error" {
-			log.Debugf("describeTaskStatus: task is error")
-			return fmt.Errorf("taskError")
-		}
-	}
-
-	return fmt.Errorf("describeTaskStatus: task time out, running more than 20 minutes")
-}
