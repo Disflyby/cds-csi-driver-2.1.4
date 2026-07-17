@@ -14,6 +14,7 @@ const (
 	dialTimeout       = time.Duration(3) * time.Second
 	subpathLiteral    = "subpath"
 	fileSystemLiteral = "filesystem"
+	nasDynamicVolumePrefix = "nas-dynamic:"
 	defaultNfsVersion = "4.0"
 	defaultDeleteNas  = "false"
 )

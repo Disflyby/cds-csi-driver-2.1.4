@@ -294,6 +294,7 @@ func mountNasVolume(opts *PublishOptions, volumeId string) error {
 	if err != nil && opts.Path != "/" && !opts.DynamicSubpath {
 		if strings.Contains(err.Error(), "No such file or directory") ||
 			strings.Contains(err.Error(), "access denied by server while mounting") {
+			log.Warnf("nas: NFS mount failed, auto-creating missing NFS subdirectory %s (may indicate a permission or path issue)", serverMountPoint)
 			subDir := volumeId
 			if opts.AllowSharePath {
 				subDir = ""
@@ -328,6 +329,17 @@ func (opts *NfsOpts) createNasSubDirWithMarker(mountRoot, subDir, volumeID strin
 	log.Debugf("nas, running creatNasSubDir: root: %s, path: %s, subDir:%s", mountRoot, opts.Path, subDir)
 
 	localMountPath := filepath.Join(mountRoot, subDir)
+	fullPath := filepath.Join(localMountPath, subDir)
+
+	// Skip creation if the volume marker already exists. This makes dynamic
+	// provisioning idempotent across controller restarts.
+	if volumeID != "" {
+		exists, markErr := volumeMarkerExists(fullPath, volumeID)
+		if markErr == nil && exists {
+			log.Infof("nas subpath marker already exists, skipping creation: %s", fullPath)
+			return nil
+		}
+	}
 	fullPath := filepath.Join(localMountPath, subDir)
 	mounted, err := isMountPoint(localMountPath)
 	if err != nil {

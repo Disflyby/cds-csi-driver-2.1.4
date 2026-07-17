@@ -61,3 +61,10 @@ type DeleteVolumeSubpathOptions struct {
 	Vers            string
 	ArchiveOnDelete bool
 }
+
+type nasDynamicVolumeRef struct {
+	Server  string `json:"server"`
+	Path    string `json:"path"`
+	Vers    string `json:"vers"`
+
+}

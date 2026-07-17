@@ -2,7 +2,10 @@ package nas
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -113,8 +116,18 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		utils.SentrySendError(fmt.Errorf("CreateVolume:: nas, failed to create subpath on the NAS server: %s", err))
 		return nil, status.Errorf(codes.Internal, "create NFS subpath: %v", err)
 	}
+
+	volumeID, err := encodeNasDynamicVolumeID(nasDynamicVolumeRef{
+		Server: opts.Server,
+		Path:   opts.Path,
+		Vers:   opts.Vers,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "encode NAS volume ID: %v", err)
+	}
+
 	volToCreate := &csi.Volume{
-		VolumeId:      pvName,
+		VolumeId:      volumeID,
 		CapacityBytes: req.GetCapacityRange().GetRequiredBytes(),
 		VolumeContext: newSubpathVolumeContext(opts, pvName),
 	}
@@ -129,9 +142,28 @@ func (c *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolu
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume ID: %v", err)
 	}
 
+	// Try to decode as a dynamic VolumeID first. Dynamic volumes carry
+	// their cleanup parameters inline so that DeleteVolume does not
+	// depend on the PV or StorageClass still existing in the API.
+	ref, dynamic, decodeErr := decodeNasDynamicVolumeID(req.GetVolumeId())
+	if decodeErr != nil {
+		log.Warnf("DeleteVolume: failed to decode dynamic volume ID, falling back to k8s API: %v", decodeErr)
+	}
+	if dynamic {
+		log.Infof("DeleteVolume: decoded dynamic volume ref server=%s path=%s vers=%s", ref.Server, ref.Path, ref.Vers)
+		if err := deleteNFSSubpath(ref.Server, ref.Path, ref.Vers, deleteVolumeRoot, req.GetVolumeId(), false); err != nil {
+			utils.SentrySendError(fmt.Errorf("DeleteVolume:: nas, delete NFS subpath: %s", err))
+			return nil, status.Errorf(codes.Aborted, "delete NFS subpath for volume %s: %v", req.VolumeId, err)
+		}
+		processedPvc.Delete(req.VolumeId)
+		log.Infof("DeleteVolume:: volume %s has been deleted successfully", req.VolumeId)
+		return &csi.DeleteVolumeResponse{}, nil
+	}
+
 	pv, err := c.Client.CoreV1().PersistentVolumes().Get(req.VolumeId, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
+			log.Warnf("DeleteVolume: PV %s not found and volume ID is not dynamic — NFS subdirectory may be orphaned", req.VolumeId)
 			return &csi.DeleteVolumeResponse{}, nil
 		}
 		return nil, fmt.Errorf("DeleteVolume:: nas, get Volume: %s from cluster error: %s", req.VolumeId, err.Error())
@@ -170,42 +202,41 @@ func (c *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolu
 
 	// filesystem
 	if volumeAs == fileSystemLiteral {
-		// step1: check params
-		fileSystemNasID := ""
-		fileSystemNasIP := ""
-		mountTargetPath := ""
-		deleteVolume := defaultDeleteNas
+		// check pv path, should be not the nfs root
+		var mountTargetPath string
+		// check delete Nas storage
+		// when deleteNas is "true", delete Nas storage; when deleteNas is "false", skip to retain nas storage(all sc and pv)
+		var deleteNasResult string
+
+		log.Infof("DeleteVolume: volumeAs is %s", volumeAs)
+		log.Debugf("DeleteVolume: Nas, volume attrs: %v", pv.Spec.CSI.VolumeAttributes)
+
+		// step0: get deleteVolume
 		if value, ok := pv.Spec.CSI.VolumeAttributes["deleteNas"]; ok {
-			deleteVolume = value
+			deleteNasResult = value
+			log.Debugf("DeleteVolume: deleteNasResult is: %s", deleteNasResult)
+		} else {
+			deleteNasResult = defaultDeleteNas
+			log.Debugf("DeleteVolume: deleteNasResult is [empty], use default: %v", defaultDeleteNas)
 		}
-		if deleteVolume == "true" {
-			// step2: check pv's params
-			if value, ok := pv.Spec.CSI.VolumeAttributes["fileSystemId"]; !ok {
-				log.Errorf("DeleteVolume: nas, volumeID is: %s, fileSystemId is empty", req.VolumeId)
-				utils.SentrySendError(fmt.Errorf("DeleteVolume: nas, volumeID is: %s, fileSystemId is empty", req.VolumeId))
-				return nil, fmt.Errorf("DeleteVolume: nas, volumeID is: %s, fileSystemId is empty", req.VolumeId)
-			} else {
+
+		//  delete nas and filesystem
+		if deleteNasResult == "true" {
+			log.Infof("DeleteVolume: Nas volume(%s) Filesystem's deleteVolume is [true], will delete nas storage and pv data", req.VolumeId)
+
+			// step1: get nas uid
+			var fileSystemNasID string
+			if value, ok := pv.Spec.CSI.VolumeAttributes["nasId"]; ok {
 				fileSystemNasID = value
-				log.Debugf("DeleteVolume: nas, volumeID is: %s, fileSystemId is: %s", req.VolumeId, fileSystemNasID)
+				log.Debugf("DeleteVolume: nasID is:%s", fileSystemNasID)
+			} else {
+				log.Errorf("DeleteVolume: nasID is empty, CSI is: %v", pv.Spec.CSI)
+				utils.SentrySendError(fmt.Errorf("DeleteVolume: nasID is empty, CSI is: %v", pv.Spec.CSI))
+				return nil, fmt.Errorf("DeleteVolume: nasID is empty, CSI is: %v", pv.Spec.CSI)
 			}
 
-			// check if pv is deleted or not
-			if value, ok := pvcFileSystemDeleteMap.Load(fileSystemNasID); ok {
-				if value == "deleting" {
-					log.Debugf("DeleteVolume: the pv has been deleting, ignore this request to avoid repeating delete")
-					return nil, fmt.Errorf("DeleteVolume: the pv have been deleting, ignore this request to avoid repeating delete")
-				} else if value == "ok" {
-					log.Debugf("DeleteVolume: pv deleting process finished")
-					pvcFileSystemDeleteMap.Delete(fileSystemNasID)
-					return &csi.DeleteVolumeResponse{}, nil
-				}
-
-			}
-
-			// set pv deleting status
-			pvcFileSystemDeleteMap.Store(fileSystemNasID, "deleting")
-
-			// check pv nasIP
+			// step2: get nas server ip
+			var fileSystemNasIP string
 			if value, ok := pv.Spec.CSI.VolumeAttributes["server"]; ok {
 				fileSystemNasIP = value
 				log.Debugf("DeleteVolume: nas, server is: %s", fileSystemNasIP)
@@ -296,6 +327,32 @@ func (c ControllerServer) ValidateVolumeCapabilities(ctx context.Context, req *c
 
 func (c ControllerServer) ControllerExpandVolume(context.Context, *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "")
+}
+
+func encodeNasDynamicVolumeID(ref nasDynamicVolumeRef) (string, error) {
+	data, err := json.Marshal(ref)
+	if err != nil {
+		return "", err
+	}
+	return nasDynamicVolumePrefix + base64.RawURLEncoding.EncodeToString(data), nil
+}
+
+func decodeNasDynamicVolumeID(volumeID string) (nasDynamicVolumeRef, bool, error) {
+	if !strings.HasPrefix(volumeID, nasDynamicVolumePrefix) {
+		return nasDynamicVolumeRef{}, false, nil
+	}
+	data, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(volumeID, nasDynamicVolumePrefix))
+	if err != nil {
+		return nasDynamicVolumeRef{}, true, fmt.Errorf("invalid dynamic NAS volume ID: %w", err)
+	}
+	ref := nasDynamicVolumeRef{}
+	if err := json.Unmarshal(data, &ref); err != nil {
+		return nasDynamicVolumeRef{}, true, fmt.Errorf("invalid dynamic NAS volume ID: %w", err)
+	}
+	if ref.Server == "" || ref.Path == "" {
+		return nasDynamicVolumeRef{}, true, fmt.Errorf("incomplete dynamic NAS volume ID")
+	}
+	return ref, true, nil
 }
 
 func describeTaskStatus(taskID string) error {

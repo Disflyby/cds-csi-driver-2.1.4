@@ -2,6 +2,7 @@ package nas
 
 import (
 	"context"
+	"os"
 	"fmt"
 	"github.com/capitalonline/cds-csi-driver/pkg/driver/utils"
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -57,6 +58,7 @@ func (n *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 	mounted, err = isMountPoint(opts.NodePublishPath)
 	if err != nil || !mounted {
 		_ = unmountNFS(opts.NodePublishPath)
+		_ = os.Remove(opts.NodePublishPath)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "verify NFS mount point %s: %v", opts.NodePublishPath, err)
 		}
@@ -64,6 +66,7 @@ func (n *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 	}
 	if err := changeNasMode(opts); err != nil {
 		_ = unmountNFS(opts.NodePublishPath)
+		_ = os.Remove(opts.NodePublishPath)
 		return nil, status.Errorf(codes.InvalidArgument, "apply NFS mode: %v", err)
 	}
 	log.Infof("NodePublishVolume:: volume %s mount successfully on mount point: %s", req.VolumeId, opts.NodePublishPath)
