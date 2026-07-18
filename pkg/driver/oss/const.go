@@ -20,6 +20,10 @@ const (
 )
 
 var defaultS3fsOptions = []string{
+	"compat_dir",
+	"connect_timeout=10",
+	"readwrite_timeout=30",
+	"retries=2",
 	"dbglevel=info",
 	"curldbg",
 	"allow_other",

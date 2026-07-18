@@ -2,6 +2,7 @@ package oss
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -156,6 +157,23 @@ func TestNodePublishBindsExistingStagingMount(t *testing.T) {
 	}
 }
 
+func TestNodeStageChecksExistingStagingMountReadiness(t *testing.T) {
+	mounter := newFakeMounter()
+	stagingTarget := filepath.Join(t.TempDir(), "stage")
+	mounter.mounted[stagingTarget] = true
+	node := &NodeServer{mounter: mounter}
+
+	_, err := node.NodeStageVolume(context.Background(), &csi.NodeStageVolumeRequest{
+		VolumeId: "volume-a", StagingTargetPath: stagingTarget,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mounter.readyChecks) != 1 || mounter.readyChecks[0] != stagingTarget {
+		t.Fatalf("ready checks = %v", mounter.readyChecks)
+	}
+}
+
 func TestS3fsMountArgsUseVirtualHostStyle(t *testing.T) {
 	opts := &PublishOptions{OssOpts: OssOpts{Bucket: "bucket-a", URL: "https://oss.example.test", Path: "/prefix", AddressingStyle: "virtual"}, NodePublishPath: "/target"}
 	if err := opts.parsOssOpts(); err != nil {
@@ -184,6 +202,39 @@ func TestS3fsMountArgsIncludeRegionAndSignature(t *testing.T) {
 	}
 }
 
+func TestS3fsMountArgsIncludeCompatibilityAndTimeouts(t *testing.T) {
+	opts := &PublishOptions{OssOpts: OssOpts{
+		Bucket: "bucket-a", URL: "https://oss.example.test", Path: "/prefix",
+	}, NodePublishPath: "/target"}
+	if err := opts.parsOssOpts(); err != nil {
+		t.Fatal(err)
+	}
+	args := s3fsMountArgs(opts, "/credentials/volume.passwd")
+	for _, option := range []string{"compat_dir", "connect_timeout=10", "readwrite_timeout=30", "retries=2"} {
+		if !containsMountOption(args, option) {
+			t.Fatalf("mount args must include %q", option)
+		}
+	}
+}
+
+func TestVerifyStagingMountRollsBackFailedRead(t *testing.T) {
+	mounter := newFakeMounter()
+	mounter.mounted["/stage"] = true
+	mounter.readyErr = errors.New("read timed out")
+	node := &NodeServer{mounter: mounter}
+
+	err := node.verifyStagingMount(context.Background(), "/stage")
+	if err == nil || !strings.Contains(err.Error(), "read timed out") {
+		t.Fatalf("verifyStagingMount() error = %v", err)
+	}
+	if len(mounter.readyChecks) != 1 || mounter.readyChecks[0] != "/stage" {
+		t.Fatalf("ready checks = %v", mounter.readyChecks)
+	}
+	if len(mounter.lazyUnmounts) != 1 || mounter.lazyUnmounts[0] != "/stage" {
+		t.Fatalf("lazy unmounts = %v", mounter.lazyUnmounts)
+	}
+}
+
 func containsMountOption(args []string, option string) bool {
 	for _, arg := range args {
 		if arg == option {
@@ -194,10 +245,13 @@ func containsMountOption(args []string, option string) bool {
 }
 
 type fakeMounter struct {
-	mounted  map[string]bool
-	mounts   []string
-	binds    []string
-	unmounts []string
+	mounted      map[string]bool
+	mounts       []string
+	binds        []string
+	unmounts     []string
+	lazyUnmounts []string
+	readyChecks  []string
+	readyErr     error
 }
 
 func newFakeMounter() *fakeMounter {
@@ -224,6 +278,17 @@ func (m *fakeMounter) Unmount(_ context.Context, target string) error {
 	m.unmounts = append(m.unmounts, target)
 	delete(m.mounted, target)
 	return nil
+}
+
+func (m *fakeMounter) UnmountLazy(_ context.Context, target string) error {
+	m.lazyUnmounts = append(m.lazyUnmounts, target)
+	delete(m.mounted, target)
+	return nil
+}
+
+func (m *fakeMounter) CheckReady(_ context.Context, target string) error {
+	m.readyChecks = append(m.readyChecks, target)
+	return m.readyErr
 }
 
 func (m *fakeMounter) IsMounted(target string) (bool, error) {

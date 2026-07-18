@@ -1,6 +1,13 @@
 package oss
 
-import "testing"
+import (
+	"context"
+	"io"
+	"strings"
+	"testing"
+
+	"github.com/minio/minio-go/v7"
+)
 
 func TestDynamicVolumeIDRoundTrip(t *testing.T) {
 	want := dynamicVolumeRef{
@@ -213,4 +220,33 @@ func TestCredentialsFromValues(t *testing.T) {
 	if !credentials.valid() {
 		t.Fatal("expected credentials to be parsed")
 	}
+}
+
+func TestEnsureObjectPrefixCreatesDirectoryAndOwnershipMarkers(t *testing.T) {
+	putter := &recordingObjectPutter{}
+	ref := dynamicVolumeRef{Bucket: "bucket-a", Path: "/team/csi-volume-a"}
+	if err := ensureObjectPrefix(context.Background(), putter, ref); err != nil {
+		t.Fatal(err)
+	}
+	wantKeys := []string{"team/csi-volume-a/", "team/csi-volume-a/.csi-volume"}
+	if strings.Join(putter.keys, ",") != strings.Join(wantKeys, ",") {
+		t.Fatalf("object keys = %v, want %v", putter.keys, wantKeys)
+	}
+	if putter.contentTypes[0] != "application/x-directory" {
+		t.Fatalf("directory marker content type = %q", putter.contentTypes[0])
+	}
+}
+
+type recordingObjectPutter struct {
+	keys         []string
+	contentTypes []string
+}
+
+func (p *recordingObjectPutter) PutObject(_ context.Context, _ string, key string, reader io.Reader, _ int64, options minio.PutObjectOptions) (minio.UploadInfo, error) {
+	if _, err := io.ReadAll(reader); err != nil {
+		return minio.UploadInfo{}, err
+	}
+	p.keys = append(p.keys, key)
+	p.contentTypes = append(p.contentTypes, options.ContentType)
+	return minio.UploadInfo{}, nil
 }

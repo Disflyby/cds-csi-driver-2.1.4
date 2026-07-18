@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/capitalonline/cds-csi-driver/pkg/driver/utils"
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -16,6 +17,11 @@ import (
 )
 
 var errStageCredentialsUnavailable = errors.New("OSS credentials are unavailable for NodeStageVolume")
+
+const (
+	ossMountReadinessTimeout = 15 * time.Second
+	ossMountRollbackTimeout  = 10 * time.Second
+)
 
 func NewNodeServer(d *OssDriver) *NodeServer {
 	return newNodeServer(d, newS3FSMounter())
@@ -164,6 +170,12 @@ func (n *NodeServer) stageVolume(ctx context.Context, volumeID, stagingTargetPat
 		return fmt.Errorf("check mount point: %w", err)
 	}
 	if mounted {
+		if err := n.verifyStagingMount(ctx, stagingTargetPath); err != nil {
+			if credentialFile, pathErr := credentialFilePath(volumeID, stagingTargetPath); pathErr == nil {
+				_ = removeOssCredential(credentialFile)
+			}
+			return err
+		}
 		return nil
 	}
 
@@ -203,9 +215,9 @@ func (n *NodeServer) stageVolume(ctx context.Context, volumeID, stagingTargetPat
 	if err := writeOssCredential(credentialFile, credentials); err != nil {
 		return err
 	}
-	mounted = false
+	ready := false
 	defer func() {
-		if !mounted {
+		if !ready {
 			_ = removeOssCredential(credentialFile)
 		}
 	}()
@@ -221,6 +233,24 @@ func (n *NodeServer) stageVolume(ctx context.Context, volumeID, stagingTargetPat
 	}
 	if !mounted {
 		return errors.New("s3fs exited without creating the staging mount")
+	}
+	if err := n.verifyStagingMount(ctx, stagingTargetPath); err != nil {
+		return err
+	}
+	ready = true
+	return nil
+}
+
+func (n *NodeServer) verifyStagingMount(ctx context.Context, stagingTargetPath string) error {
+	readinessCtx, cancelReadiness := context.WithTimeout(ctx, ossMountReadinessTimeout)
+	defer cancelReadiness()
+	if err := n.mounter.CheckReady(readinessCtx, stagingTargetPath); err != nil {
+		rollbackCtx, cancelRollback := context.WithTimeout(context.Background(), ossMountRollbackTimeout)
+		defer cancelRollback()
+		if rollbackErr := n.mounter.UnmountLazy(rollbackCtx, stagingTargetPath); rollbackErr != nil {
+			return fmt.Errorf("read OSS staging mount: %v; rollback mount: %w", err, rollbackErr)
+		}
+		return fmt.Errorf("read OSS staging mount: %w", err)
 	}
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	pathpkg "path"
 	"strings"
@@ -29,6 +30,10 @@ type dynamicVolumeRef struct {
 	Region          string `json:"region,omitempty"`
 	SignatureType   string `json:"signatureType,omitempty"`
 	Mounter         string `json:"mounter,omitempty"`
+}
+
+type objectPutter interface {
+	PutObject(context.Context, string, string, io.Reader, int64, minio.PutObjectOptions) (minio.UploadInfo, error)
 }
 
 func NewControllerServer(d *OssDriver) *ControllerServer {
@@ -263,10 +268,20 @@ func (ref dynamicVolumeRef) ossOpts() OssOpts {
 	}
 }
 
-func ensureObjectPrefix(ctx context.Context, client *minio.Client, ref dynamicVolumeRef) error {
-	marker := strings.TrimPrefix(ref.Path, "/") + "/" + dynamicMarkerName
-	_, err := client.PutObject(ctx, ref.Bucket, marker, strings.NewReader(""), 0, minio.PutObjectOptions{ContentType: "application/octet-stream"})
-	return err
+func ensureObjectPrefix(ctx context.Context, client objectPutter, ref dynamicVolumeRef) error {
+	prefix := strings.Trim(ref.Path, "/")
+	if prefix == "" {
+		return fmt.Errorf("dynamic OSS volume prefix must not be the bucket root")
+	}
+	directoryMarker := prefix + "/"
+	if _, err := client.PutObject(ctx, ref.Bucket, directoryMarker, strings.NewReader(""), 0, minio.PutObjectOptions{ContentType: "application/x-directory"}); err != nil {
+		return fmt.Errorf("create OSS directory marker: %w", err)
+	}
+	ownershipMarker := directoryMarker + dynamicMarkerName
+	if _, err := client.PutObject(ctx, ref.Bucket, ownershipMarker, strings.NewReader(""), 0, minio.PutObjectOptions{ContentType: "application/octet-stream"}); err != nil {
+		return fmt.Errorf("create OSS ownership marker: %w", err)
+	}
+	return nil
 }
 
 func removeObjectPrefix(ctx context.Context, client *minio.Client, ref dynamicVolumeRef) error {

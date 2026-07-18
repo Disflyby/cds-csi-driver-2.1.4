@@ -13,6 +13,8 @@ type Mounter interface {
 	Mount(context.Context, *PublishOptions, string) error
 	BindMount(context.Context, string, string, bool) error
 	Unmount(context.Context, string) error
+	UnmountLazy(context.Context, string) error
+	CheckReady(context.Context, string) error
 	IsMounted(string) (bool, error)
 }
 
@@ -51,6 +53,14 @@ func (m *commandMounter) BindMount(ctx context.Context, source, target string, r
 
 func (m *commandMounter) Unmount(ctx context.Context, target string) error {
 	return m.run(ctx, "umount", target)
+}
+
+func (m *commandMounter) UnmountLazy(ctx context.Context, target string) error {
+	return m.run(ctx, "umount", "-l", target)
+}
+
+func (m *commandMounter) CheckReady(ctx context.Context, target string) error {
+	return m.run(ctx, "ls", "-A", "--", target)
 }
 
 func (m *commandMounter) IsMounted(target string) (bool, error) {
