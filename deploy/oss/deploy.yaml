@@ -175,7 +175,7 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
-        image: harbor-dev.yun-paas.com/storage_image/cds-csi-driver-oss:v2.2.0
+        image: harbor-dev.yun-paas.com/storage_image/cds-csi-driver-oss:v2.2.1
         imagePullPolicy: Always
         name: csi-controller-server
         resources:
@@ -258,7 +258,7 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
-        image: harbor-dev.yun-paas.com/storage_image/cds-csi-driver-oss:v2.2.0
+        image: harbor-dev.yun-paas.com/storage_image/cds-csi-driver-oss:v2.2.1
         imagePullPolicy: Always
         name: oss-csi-node-server
         securityContext:

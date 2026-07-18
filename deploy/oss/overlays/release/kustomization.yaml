@@ -4,7 +4,7 @@ bases:
 images:
 - name: registry-bj.capitalonline.net/cck/cds-csi-driver-oss
   newName: harbor-dev.yun-paas.com/storage_image/cds-csi-driver-oss
-  newTag: v2.2.0
+  newTag: v2.2.1
 - name: harbor-dev.yun-paas.com/csi_agent/csi-provisioner
   newName: harbor-dev.yun-paas.com/csi_agent/csi-provisioner
   newTag: v3.1.0

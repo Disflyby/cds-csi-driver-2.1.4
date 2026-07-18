@@ -282,7 +282,7 @@ and a checksum-pinned s3fs build. It no longer installs packages or a systemd
 service on Kubernetes nodes. Build the image with:
 
 ```bash
-make oss-image OSS_IMAGE=harbor-dev.yun-paas.com/storage_image/cds-csi-driver-oss OSS_VERSION=v2.2.0
+make oss-image OSS_IMAGE=harbor-dev.yun-paas.com/storage_image/cds-csi-driver-oss OSS_VERSION=v2.2.1
 ```
 
 The node must expose `/dev/fuse`, and `/var/lib/kubelet` must be mounted into the
