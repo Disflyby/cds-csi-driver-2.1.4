@@ -1,10 +1,13 @@
 package oss
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/container-storage-interface/spec/lib/go/csi"
 )
 
 func TestCredentialFileNameIsIsolatedPerMount(t *testing.T) {
@@ -68,6 +71,15 @@ func TestParseOssOptsRejectsBadSignatureType(t *testing.T) {
 	}
 }
 
+func TestParseOssOptsRejectsConflictingEndpointAliases(t *testing.T) {
+	opts := &OssOpts{
+		Bucket: "bucket-a", Endpoint: "https://s3.example.test", URL: "https://other.example.test",
+	}
+	if err := opts.parsOssOpts(); err == nil {
+		t.Fatal("expected conflicting endpoint and url values to be rejected")
+	}
+}
+
 func TestParseOssOptsAcceptsRegionAndSignature(t *testing.T) {
 	opts := &OssOpts{Bucket: "bucket-a", URL: "https://oss.example.test", Region: "cn-east-1", SignatureType: "v2"}
 	if err := opts.parsOssOpts(); err != nil {
@@ -83,6 +95,9 @@ func TestParseOssOptsAcceptsRegionAndSignature(t *testing.T) {
 
 func TestS3fsMountArgsPreserveArgumentBoundaries(t *testing.T) {
 	opts := &PublishOptions{OssOpts: OssOpts{Bucket: "bucket-a", URL: "https://oss.example.test", Path: "/prefix"}, NodePublishPath: "/target"}
+	if err := opts.parsOssOpts(); err != nil {
+		t.Fatal(err)
+	}
 	args := s3fsMountArgs(opts, "/credentials/volume.passwd")
 	want := []string{"bucket-a:/prefix", "/target", "-o", "passwd_file=/credentials/volume.passwd", "-o", "url=https://oss.example.test"}
 	for index, value := range want {
@@ -92,6 +107,52 @@ func TestS3fsMountArgsPreserveArgumentBoundaries(t *testing.T) {
 	}
 	if !containsMountOption(args, "use_path_request_style") {
 		t.Fatal("path-style mounts must include use_path_request_style")
+	}
+}
+
+func TestNodeCapabilitiesIncludeStageUnstage(t *testing.T) {
+	node := &NodeServer{}
+	response, err := node.NodeGetCapabilities(context.Background(), &csi.NodeGetCapabilitiesRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Capabilities) != 1 || response.Capabilities[0].GetRpc().GetType() != csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME {
+		t.Fatalf("unexpected node capabilities: %+v", response.Capabilities)
+	}
+}
+
+func TestNodeStageDefersWhenLegacyPVHasNoStageSecret(t *testing.T) {
+	mounter := newFakeMounter()
+	node := &NodeServer{mounter: mounter}
+	response, err := node.NodeStageVolume(context.Background(), &csi.NodeStageVolumeRequest{
+		VolumeId: "volume-a", StagingTargetPath: filepath.Join(t.TempDir(), "stage"),
+	})
+	if err != nil || response == nil {
+		t.Fatalf("NodeStageVolume() response=%v error=%v", response, err)
+	}
+	if len(mounter.mounts) != 0 {
+		t.Fatal("NodeStageVolume must not mount without a stage secret")
+	}
+}
+
+func TestNodePublishBindsExistingStagingMount(t *testing.T) {
+	mounter := newFakeMounter()
+	root := t.TempDir()
+	stagingTarget := filepath.Join(root, "stage")
+	publishTarget := filepath.Join(root, "publish")
+	mounter.mounted[stagingTarget] = true
+	node := &NodeServer{mounter: mounter}
+	_, err := node.NodePublishVolume(context.Background(), &csi.NodePublishVolumeRequest{
+		VolumeId: "volume-a", StagingTargetPath: stagingTarget, TargetPath: publishTarget, Readonly: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mounter.binds) != 1 || mounter.binds[0] != stagingTarget+"->"+publishTarget+":ro" {
+		t.Fatalf("bind calls = %v", mounter.binds)
+	}
+	if len(mounter.mounts) != 0 {
+		t.Fatal("NodePublishVolume must not create another s3fs mount when staging is mounted")
 	}
 }
 
@@ -130,4 +191,41 @@ func containsMountOption(args []string, option string) bool {
 		}
 	}
 	return false
+}
+
+type fakeMounter struct {
+	mounted  map[string]bool
+	mounts   []string
+	binds    []string
+	unmounts []string
+}
+
+func newFakeMounter() *fakeMounter {
+	return &fakeMounter{mounted: map[string]bool{}}
+}
+
+func (m *fakeMounter) Mount(_ context.Context, opts *PublishOptions, _ string) error {
+	m.mounts = append(m.mounts, opts.NodePublishPath)
+	m.mounted[opts.NodePublishPath] = true
+	return nil
+}
+
+func (m *fakeMounter) BindMount(_ context.Context, source, target string, readOnly bool) error {
+	mode := "rw"
+	if readOnly {
+		mode = "ro"
+	}
+	m.binds = append(m.binds, source+"->"+target+":"+mode)
+	m.mounted[target] = true
+	return nil
+}
+
+func (m *fakeMounter) Unmount(_ context.Context, target string) error {
+	m.unmounts = append(m.unmounts, target)
+	delete(m.mounted, target)
+	return nil
+}
+
+func (m *fakeMounter) IsMounted(target string) (bool, error) {
+	return m.mounted[target], nil
 }

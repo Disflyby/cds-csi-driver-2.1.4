@@ -25,7 +25,6 @@ import (
 const (
 	NodeMetaDataFile = "/host/etc/cds/node-meta"
 	CloudInitDevSize = 8 * 1024
-	SockFile         = "/var/run/oss-server.sock"
 )
 
 // Metrics represents the used and available bytes of the Volume.
@@ -359,57 +358,4 @@ func FsInfo(path string) (int64, int64, int64, int64, int64, int64, error) {
 	inodesUsed := inodes - inodesFree
 
 	return available, capacity, usage, inodes, inodesFree, inodesUsed, nil
-}
-
-type systemCommandRequest struct {
-	Operation string   `json:"operation"`
-	Args      []string `json:"args"`
-}
-
-type systemCommandResponse struct {
-	Success bool   `json:"success"`
-	Mounted bool   `json:"mounted"`
-	Error   string `json:"error,omitempty"`
-}
-
-// RunSystemCommand asks the node-local oss-server to run an allowlisted
-// command. The request is structured so Kubernetes-provided values never pass
-// through a shell.
-func RunSystemCommand(operation string, args ...string) error {
-	response, err := runSystemCommand(operation, args)
-	if err != nil {
-		return err
-	}
-	if !response.Success {
-		return fmt.Errorf("oss-server %s failed: %s", operation, response.Error)
-	}
-	return nil
-}
-
-func IsSystemMountPoint(targetPath string) (bool, error) {
-	response, err := runSystemCommand("is-mounted", []string{targetPath})
-	if err != nil {
-		return false, err
-	}
-	if !response.Success {
-		return false, fmt.Errorf("oss-server mount check failed: %s", response.Error)
-	}
-	return response.Mounted, nil
-}
-
-func runSystemCommand(operation string, args []string) (systemCommandResponse, error) {
-	conn, err := net.DialTimeout("unix", SockFile, 5*time.Second)
-	if err != nil {
-		return systemCommandResponse{}, fmt.Errorf("connect to oss-server: %w", err)
-	}
-	defer conn.Close()
-
-	if err := json.NewEncoder(conn).Encode(systemCommandRequest{Operation: operation, Args: args}); err != nil {
-		return systemCommandResponse{}, fmt.Errorf("write oss-server request: %w", err)
-	}
-	response := systemCommandResponse{}
-	if err := json.NewDecoder(conn).Decode(&response); err != nil {
-		return systemCommandResponse{}, fmt.Errorf("read oss-server response: %w", err)
-	}
-	return response, nil
 }

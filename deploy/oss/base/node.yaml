@@ -12,20 +12,6 @@ spec:
       labels:
         app: oss-csi-cds-node
     spec:
-      initContainers:
-      - name: install-oss-server
-        image: registry-bj.capitalonline.net/cck/oss-server:v1.0.2
-        imagePullPolicy: Always
-        command:
-        - /bin/sh
-        - /install-oss.sh
-        securityContext:
-          privileged: true
-        volumeMounts:
-        - name: local-srv
-          mountPath: /srv/
-        - name: systemd
-          mountPath: /host/config/system/
       tolerations:
       - operator: Exists
       priorityClassName: system-node-critical
@@ -39,7 +25,7 @@ spec:
           capabilities:
             add: ["SYS_ADMIN"]
           allowPrivilegeEscalation: true
-        image: registry-bj.capitalonline.net/cck/cds-csi-driver:latest
+        image: registry-bj.capitalonline.net/cck/cds-csi-driver-oss:latest
         imagePullPolicy: "Always"
         args:
         - "--endpoint=$(CSI_ENDPOINT)"
@@ -56,11 +42,11 @@ spec:
         volumeMounts:
         - name: kubelet-dir
           mountPath: /var/lib/kubelet/
+          mountPropagation: Bidirectional
+        - name: fuse-device
+          mountPath: /dev/fuse
         - name: host-log
           mountPath: /var/log/
-        - name: run
-          mountPath: /var/run
-          mountPropagation: Bidirectional
         - name: host-etc
           mountPath: /host/etc
           readOnly: true
@@ -109,16 +95,9 @@ spec:
         hostPath:
           path: /etc
           type: Directory
-      - name: run
+      - name: fuse-device
         hostPath:
-          path: /var/run/
-          type: DirectoryOrCreate
-      - name: local-srv
-        hostPath:
-          path: /srv/
-          type: DirectoryOrCreate
-      - name: systemd
-        hostPath:
-          path: /usr/lib/systemd/system/
+          path: /dev/fuse
+          type: CharDevice
   updateStrategy:
     type: "RollingUpdate"

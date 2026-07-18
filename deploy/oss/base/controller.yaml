@@ -23,7 +23,7 @@ spec:
         - operator: Exists
       containers:
         - name: csi-controller-server
-          image: registry-bj.capitalonline.net/cck/cds-csi-driver:latest
+          image: registry-bj.capitalonline.net/cck/cds-csi-driver-oss:latest
           imagePullPolicy: Always
           args:
             - --endpoint=$(CSI_ENDPOINT)

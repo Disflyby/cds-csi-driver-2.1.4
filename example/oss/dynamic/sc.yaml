@@ -6,10 +6,15 @@ provisioner: oss.csi.cds.net
 reclaimPolicy: Delete
 parameters:
   bucket: "replace-with-bucket"
-  url: "https://oss.example.com"
+  endpoint: "https://oss.example.com"
+  endpointMode: "service"
   path: "/kubernetes"
-  addressingStyle: "path"
+  addressingStyle: "auto"
+  signatureType: "v4"
+  mounter: "s3fs"
   csi.storage.k8s.io/provisioner-secret-name: oss-csi-credentials
   csi.storage.k8s.io/provisioner-secret-namespace: default
+  csi.storage.k8s.io/node-stage-secret-name: oss-csi-credentials
+  csi.storage.k8s.io/node-stage-secret-namespace: default
   csi.storage.k8s.io/node-publish-secret-name: oss-csi-credentials
   csi.storage.k8s.io/node-publish-secret-namespace: default

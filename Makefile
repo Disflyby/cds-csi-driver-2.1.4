@@ -1,9 +1,11 @@
 PKG=github.com/capitalonline/cds-csi-driver
 HARBOR_REPOSITORY?=harbor-dev.yun-paas.com/csi_agent
 IMAGE?=$(HARBOR_REPOSITORY)/cds-csi-driver
-OSS_SERVER_IMAGE?=$(HARBOR_REPOSITORY)/oss-server
 VERSION?=v2.1.5
-OSS_SERVER_VERSION?=v1.0.4
+OSS_IMAGE?=harbor-dev.yun-paas.com/storage_image/cds-csi-driver-oss
+OSS_VERSION?=v2.2.0
+S3FS_VERSION?=v1.97
+S3FS_SHA256?=28413457cbf923b9b81e546caffabb8edd5c18f263e698ad86f564fd4b5b344d
 GIT_COMMIT?=$(shell git rev-parse HEAD)
 BUILD_DATE?=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS?="-X ${PKG}/pkg/common.version=${VERSION} -X ${PKG}/pkg/common.gitCommit=${GIT_COMMIT} -X ${PKG}/pkg/common.buildDate=${BUILD_DATE} -s -w"
@@ -39,14 +41,19 @@ image-release:
 image:
 	docker build -t $(IMAGE):latest .
 
-.PHONY: oss-server-image
-oss-server-image:
-	docker build -f dist/Dockerfile -t $(OSS_SERVER_IMAGE):$(OSS_SERVER_VERSION) dist
+.PHONY: oss-image
+oss-image:
+	docker build -f Dockerfile.oss \
+		--build-arg VERSION=$(OSS_VERSION) \
+		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
+		--build-arg BUILD_DATE=$(BUILD_DATE) \
+		--build-arg S3FS_VERSION=$(S3FS_VERSION) \
+		--build-arg S3FS_SHA256=$(S3FS_SHA256) \
+		-t $(OSS_IMAGE):$(OSS_VERSION) .
 
 .PHONY: release
-release: image-release oss-server-image
+release: image-release
 	docker push $(IMAGE):$(VERSION)
-	docker push $(OSS_SERVER_IMAGE):$(OSS_SERVER_VERSION)
 
 .PHONY: kustomize
 kustomize:
@@ -62,6 +69,7 @@ unit-test:
 .PHONY: test-prerequisite
 test-prerequisite:
 	docker build -t $(IMAGE):test . && docker push $(IMAGE):test
+	docker build -f Dockerfile.oss -t $(OSS_IMAGE):test . && docker push $(OSS_IMAGE):test
 	kubectl kustomize ${NAS_KUSTOMIZATION_TEST_PATH} | kubectl apply -f -
 	kubectl kustomize ${OSS_KUSTOMIZATION_TEST_PATH} | kubectl apply -f -
 	kubectl kustomize ${DISK_KUSTOMIZATION_TEST_PATH} | kubectl apply -f -

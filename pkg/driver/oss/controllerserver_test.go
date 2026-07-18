@@ -3,7 +3,11 @@ package oss
 import "testing"
 
 func TestDynamicVolumeIDRoundTrip(t *testing.T) {
-	want := dynamicVolumeRef{Bucket: "bucket-a", URL: "https://oss.example.test", Path: "/ai/csi-123", AddressingStyle: "virtual", Region: "cn-east-1", SignatureType: "v4"}
+	want := dynamicVolumeRef{
+		Bucket: "bucket-a", Endpoint: "https://oss.example.test", URL: "https://oss.example.test",
+		Path: "/ai/csi-123", EndpointMode: "service", AddressingStyle: "virtual",
+		Region: "cn-east-1", SignatureType: "v4", Mounter: "s3fs",
+	}
 	volumeID, err := encodeDynamicVolumeID(want)
 	if err != nil {
 		t.Fatalf("encodeDynamicVolumeID() error = %v", err)
@@ -52,7 +56,7 @@ func TestNewDynamicVolumeRefRejectsParentPath(t *testing.T) {
 }
 
 func TestNewOssClientRejectsUnexpectedURLParts(t *testing.T) {
-	_, err := newOssClient(dynamicVolumeRef{URL: "https://oss.example.test?region=cn", AddressingStyle: ossAddressingStylePath}, OssCredentials{AccessKeyID: "id", AccessKeySecret: "secret"})
+	_, err := newOssClient(dynamicVolumeRef{Endpoint: "https://oss.example.test?region=cn", AddressingStyle: ossAddressingStylePath}, OssCredentials{AccessKeyID: "id", AccessKeySecret: "secret"})
 	if err == nil {
 		t.Fatal("expected endpoint query to be rejected")
 	}
@@ -96,6 +100,76 @@ func TestNewDynamicVolumeRefAcceptsRegionAndSignature(t *testing.T) {
 	}
 }
 
+func TestNewDynamicVolumeRefNormalizesVirtualBucketEndpoint(t *testing.T) {
+	ref, err := newDynamicVolumeRef(map[string]string{
+		"endpoint":     "https://training-data.oss-cn-beijing.aliyuncs.com",
+		"endpointMode": "bucket",
+	}, "pvc-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Bucket != "training-data" {
+		t.Fatalf("bucket = %q, want training-data", ref.Bucket)
+	}
+	if ref.Endpoint != "https://oss-cn-beijing.aliyuncs.com" {
+		t.Fatalf("endpoint = %q", ref.Endpoint)
+	}
+	if ref.AddressingStyle != ossAddressingStyleVirtual {
+		t.Fatalf("addressing style = %q, want virtual", ref.AddressingStyle)
+	}
+	if ref.EndpointMode != ossEndpointModeService {
+		t.Fatalf("canonical endpoint mode = %q, want service", ref.EndpointMode)
+	}
+	canonical := ref.ossOpts()
+	if err := canonical.parsOssOpts(); err != nil {
+		t.Fatalf("canonical bucket endpoint must be safe to parse again: %v", err)
+	}
+}
+
+func TestNewDynamicVolumeRefNormalizesPathBucketEndpoint(t *testing.T) {
+	ref, err := newDynamicVolumeRef(map[string]string{
+		"endpoint":     "https://minio.example.test/training-data",
+		"endpointMode": "bucket",
+	}, "pvc-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.Bucket != "training-data" || ref.Endpoint != "https://minio.example.test" {
+		t.Fatalf("normalized ref = %+v", ref)
+	}
+	if ref.AddressingStyle != ossAddressingStylePath {
+		t.Fatalf("addressing style = %q, want path", ref.AddressingStyle)
+	}
+	if ref.EndpointMode != ossEndpointModeService {
+		t.Fatalf("canonical endpoint mode = %q, want service", ref.EndpointMode)
+	}
+}
+
+func TestNewDynamicVolumeRefRejectsOpaqueBucketEndpoint(t *testing.T) {
+	_, err := newDynamicVolumeRef(map[string]string{
+		"endpoint":     "https://objects.example.test",
+		"endpointMode": "bucket",
+		"bucket":       "training-data",
+	}, "pvc-123")
+	if err == nil {
+		t.Fatal("expected opaque bucket endpoint to be rejected")
+	}
+}
+
+func TestNewDynamicVolumeRefAcceptsAutoAddressing(t *testing.T) {
+	ref, err := newDynamicVolumeRef(map[string]string{
+		"endpoint":        "https://s3.example.test",
+		"bucket":          "training-data",
+		"addressingStyle": "auto",
+	}, "pvc-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref.AddressingStyle != ossAddressingStyleAuto {
+		t.Fatalf("addressing style = %q, want auto", ref.AddressingStyle)
+	}
+}
+
 func TestNewDynamicVolumeRefRejectsBadSignatureType(t *testing.T) {
 	_, err := newDynamicVolumeRef(map[string]string{
 		"bucket":        "bucket-a",
@@ -121,6 +195,9 @@ func TestDecodeLegacyDynamicVolumeIDDefaultsToPathStyle(t *testing.T) {
 	}
 	if ref.SignatureType != defaultOSSSignatureType {
 		t.Fatalf("legacy signature type = %q, want %q", ref.SignatureType, defaultOSSSignatureType)
+	}
+	if ref.Endpoint != "https://oss.example.test" || ref.EndpointMode != defaultOSSEndpointMode {
+		t.Fatalf("legacy endpoint was not normalized: %+v", ref)
 	}
 }
 

@@ -175,11 +175,9 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
-        image: harbor-dev.yun-paas.com/csi_agent/cds-csi-driver:v2.1.5
+        image: harbor-dev.yun-paas.com/storage_image/cds-csi-driver-oss:v2.2.0
         imagePullPolicy: Always
         name: csi-controller-server
-        securityContext:
-          privileged: true
         resources:
           limits:
             cpu: 100m
@@ -187,6 +185,8 @@ spec:
           requests:
             cpu: 100m
             memory: 100Mi
+        securityContext:
+          privileged: true
         volumeMounts:
         - mountPath: /socketDir
           name: socket-dir
@@ -230,8 +230,6 @@ spec:
           path: /etc
           type: Directory
         name: host-etc
-  updateStrategy:
-    type: RollingUpdate
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -247,20 +245,6 @@ spec:
       labels:
         app: oss-csi-cds-node
     spec:
-      initContainers:
-      - name: install-oss-server
-        image: harbor-dev.yun-paas.com/csi_agent/oss-server:v1.0.4
-        imagePullPolicy: Always
-        command: 
-        - /bin/sh
-        - /install-oss.sh
-        securityContext:
-          privileged: true
-        volumeMounts:
-        - mountPath: /srv/
-          name: local-srv
-        - mountPath: /host/config/system/
-          name: systemd
       containers:
       - args:
         - --endpoint=$(CSI_ENDPOINT)
@@ -274,7 +258,7 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
-        image: harbor-dev.yun-paas.com/csi_agent/cds-csi-driver:v2.1.5
+        image: harbor-dev.yun-paas.com/storage_image/cds-csi-driver-oss:v2.2.0
         imagePullPolicy: Always
         name: oss-csi-node-server
         securityContext:
@@ -285,12 +269,12 @@ spec:
           privileged: true
         volumeMounts:
         - mountPath: /var/lib/kubelet/
+          mountPropagation: Bidirectional
           name: kubelet-dir
+        - mountPath: /dev/fuse
+          name: fuse-device
         - mountPath: /var/log/
           name: host-log
-        - mountPath: /var/run
-          mountPropagation: Bidirectional
-          name: run
         - mountPath: /host/etc
           name: host-etc
           readOnly: true
@@ -349,21 +333,13 @@ spec:
           type: Directory
         name: host-etc
       - hostPath:
-          path: /var/run/
-          type: DirectoryOrCreate
-        name: run
-      - hostPath:
-          path: /srv/
-          type: DirectoryOrCreate
-        name: local-srv
-      - hostPath:
-          path: /usr/lib/systemd/system/
-          type: ""
-        name: systemd
+          path: /dev/fuse
+          type: CharDevice
+        name: fuse-device
   updateStrategy:
     type: RollingUpdate
 ---
-apiVersion: storage.k8s.io/v1beta1
+apiVersion: storage.k8s.io/v1
 kind: CSIDriver
 metadata:
   name: oss.csi.cds.net

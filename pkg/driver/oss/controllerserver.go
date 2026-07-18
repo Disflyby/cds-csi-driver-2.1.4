@@ -21,11 +21,14 @@ import (
 
 type dynamicVolumeRef struct {
 	Bucket          string `json:"bucket"`
+	Endpoint        string `json:"endpoint,omitempty"`
 	URL             string `json:"url"`
 	Path            string `json:"path"`
+	EndpointMode    string `json:"endpointMode,omitempty"`
 	AddressingStyle string `json:"addressingStyle,omitempty"`
 	Region          string `json:"region,omitempty"`
 	SignatureType   string `json:"signatureType,omitempty"`
+	Mounter         string `json:"mounter,omitempty"`
 }
 
 func NewControllerServer(d *OssDriver) *ControllerServer {
@@ -56,7 +59,7 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		return nil, status.Error(codes.InvalidArgument, "OSS credentials are required through the provisioner secret")
 	}
 
-	client, err := newOssClient(ref, credentials)
+	client, ref, err := resolveOssClient(ctx, ref, credentials)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -78,11 +81,14 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		CapacityBytes: capacityBytes,
 		VolumeContext: map[string]string{
 			"bucket":          ref.Bucket,
+			"endpoint":        ref.Endpoint,
 			"url":             ref.URL,
 			"path":            ref.Path,
+			"endpointMode":    ref.EndpointMode,
 			"addressingStyle": ref.AddressingStyle,
 			"region":          ref.Region,
 			"signatureType":   ref.SignatureType,
+			"mounter":         ref.Mounter,
 		},
 	}}, nil
 }
@@ -130,48 +136,14 @@ func (c *ControllerServer) ControllerExpandVolume(context.Context, *csi.Controll
 }
 
 func newDynamicVolumeRef(parameters map[string]string, volumeName string) (dynamicVolumeRef, error) {
-	ref := dynamicVolumeRef{}
-	for key, value := range parameters {
-		switch strings.ToLower(key) {
-		case "bucket":
-			ref.Bucket = strings.TrimSpace(value)
-		case "url":
-			ref.URL = strings.TrimSpace(value)
-		case "path":
-			ref.Path = strings.TrimSpace(value)
-		case "addressingstyle":
-			ref.AddressingStyle = strings.TrimSpace(value)
-		case "region":
-			ref.Region = strings.TrimSpace(value)
-		case "signaturetype":
-			ref.SignatureType = strings.TrimSpace(value)
-		}
+	opts := ossOptsFromValues(parameters)
+	if err := opts.parsOssOpts(); err != nil {
+		return dynamicVolumeRef{}, err
 	}
-	if ref.Bucket == "" || ref.URL == "" {
-		return ref, fmt.Errorf("StorageClass parameters bucket and url are required")
-	}
-	if ref.Path == "" {
-		ref.Path = defaultOssRoot
-	}
-	addressingStyle, err := normalizeAddressingStyle(ref.AddressingStyle)
-	if err != nil {
-		return ref, err
-	}
-	ref.AddressingStyle = addressingStyle
-	signatureType, err := normalizeSignatureType(ref.SignatureType)
-	if err != nil {
-		return ref, err
-	}
-	ref.SignatureType = signatureType
-	for _, segment := range strings.Split(strings.Trim(ref.Path, "/"), "/") {
-		if segment == ".." {
-			return ref, fmt.Errorf("StorageClass parameter path must not contain ..")
-		}
-	}
-	basePath := pathpkg.Clean("/" + strings.TrimPrefix(ref.Path, "/"))
+	basePath := pathpkg.Clean("/" + strings.TrimPrefix(opts.Path, "/"))
 	digest := sha256.Sum256([]byte(volumeName))
-	ref.Path = pathpkg.Join(basePath, "csi-"+hex.EncodeToString(digest[:12]))
-	return ref, nil
+	opts.Path = pathpkg.Join(basePath, "csi-"+hex.EncodeToString(digest[:12]))
+	return dynamicVolumeRefFromOpts(opts), nil
 }
 
 func encodeDynamicVolumeID(ref dynamicVolumeRef) (string, error) {
@@ -194,22 +166,22 @@ func decodeDynamicVolumeID(volumeID string) (dynamicVolumeRef, bool, error) {
 	if err := json.Unmarshal(data, &ref); err != nil {
 		return dynamicVolumeRef{}, true, fmt.Errorf("invalid dynamic OSS volume ID")
 	}
-	if ref.Bucket == "" || ref.URL == "" || !strings.HasPrefix(pathpkg.Base(ref.Path), "csi-") {
+	if !strings.HasPrefix(pathpkg.Base(ref.Path), "csi-") {
 		return dynamicVolumeRef{}, true, fmt.Errorf("invalid dynamic OSS volume ID")
 	}
-	ref.AddressingStyle, err = normalizeAddressingStyle(ref.AddressingStyle)
-	if err != nil {
+	opts := ref.ossOpts()
+	if err := opts.parsOssOpts(); err != nil {
 		return dynamicVolumeRef{}, true, err
 	}
-	ref.SignatureType, err = normalizeSignatureType(ref.SignatureType)
-	if err != nil {
-		return dynamicVolumeRef{}, true, err
-	}
-	return ref, true, nil
+	opts.Path = ref.Path
+	return dynamicVolumeRefFromOpts(opts), true, nil
 }
 
 func newOssClient(ref dynamicVolumeRef, credentials OssCredentials) (*minio.Client, error) {
-	endpoint, err := url.Parse(ref.URL)
+	if ref.AddressingStyle == ossAddressingStyleAuto {
+		return nil, fmt.Errorf("OSS addressingStyle must be resolved before creating a client")
+	}
+	endpoint, err := url.Parse(ref.Endpoint)
 	if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
 		return nil, fmt.Errorf("invalid OSS endpoint URL")
 	}
@@ -223,12 +195,72 @@ func newOssClient(ref dynamicVolumeRef, credentials OssCredentials) (*minio.Clie
 	if ref.AddressingStyle == ossAddressingStyleVirtual {
 		bucketLookup = minio.BucketLookupDNS
 	}
+	credentialProvider := minioCredentials.NewStaticV4(credentials.AccessKeyID, credentials.AccessKeySecret, "")
+	if ref.SignatureType == ossSignatureTypeV2 {
+		credentialProvider = minioCredentials.NewStaticV2(credentials.AccessKeyID, credentials.AccessKeySecret, "")
+	}
 	return minio.New(endpoint.Host, &minio.Options{
-		Creds:        minioCredentials.NewStaticV4(credentials.AccessKeyID, credentials.AccessKeySecret, ""),
+		Creds:        credentialProvider,
 		Secure:       endpoint.Scheme == "https",
 		BucketLookup: bucketLookup,
 		Region:       ref.Region,
 	})
+}
+
+func resolveOssClient(ctx context.Context, ref dynamicVolumeRef, credentials OssCredentials) (*minio.Client, dynamicVolumeRef, error) {
+	if ref.AddressingStyle != ossAddressingStyleAuto {
+		client, err := newOssClient(ref, credentials)
+		return client, ref, err
+	}
+
+	var probeErrors []string
+	for _, style := range []string{ossAddressingStylePath, ossAddressingStyleVirtual} {
+		candidate := ref
+		candidate.AddressingStyle = style
+		client, err := newOssClient(candidate, credentials)
+		if err != nil {
+			probeErrors = append(probeErrors, style+": "+err.Error())
+			continue
+		}
+		exists, err := client.BucketExists(ctx, candidate.Bucket)
+		if err == nil && exists {
+			return client, candidate, nil
+		}
+		if err != nil {
+			probeErrors = append(probeErrors, style+": "+err.Error())
+		} else {
+			probeErrors = append(probeErrors, style+": bucket not found")
+		}
+	}
+	return nil, ref, fmt.Errorf("resolve OSS addressingStyle automatically: %s", strings.Join(probeErrors, "; "))
+}
+
+func dynamicVolumeRefFromOpts(opts OssOpts) dynamicVolumeRef {
+	return dynamicVolumeRef{
+		Bucket:          opts.Bucket,
+		Endpoint:        opts.Endpoint,
+		URL:             opts.URL,
+		Path:            opts.Path,
+		EndpointMode:    opts.EndpointMode,
+		AddressingStyle: opts.AddressingStyle,
+		Region:          opts.Region,
+		SignatureType:   opts.SignatureType,
+		Mounter:         opts.Mounter,
+	}
+}
+
+func (ref dynamicVolumeRef) ossOpts() OssOpts {
+	return OssOpts{
+		Bucket:          ref.Bucket,
+		Endpoint:        ref.Endpoint,
+		URL:             ref.URL,
+		Path:            ref.Path,
+		EndpointMode:    ref.EndpointMode,
+		AddressingStyle: ref.AddressingStyle,
+		Region:          ref.Region,
+		SignatureType:   ref.SignatureType,
+		Mounter:         ref.Mounter,
+	}
 }
 
 func ensureObjectPrefix(ctx context.Context, client *minio.Client, ref dynamicVolumeRef) error {

@@ -212,16 +212,35 @@ Examples can be found [here](!https://github.com/capitalonline/cds-csi-driver/tr
 Dynamic OSS volumes allocate one generated prefix per PVC beneath the StorageClass `path`.
 Create the credential Secret before applying the StorageClass, then apply the PVC. The
 StorageClass must set `csi.storage.k8s.io/provisioner-secret-*` and
-`csi.storage.k8s.io/node-publish-secret-*`. The external provisioner uses the
+`csi.storage.k8s.io/node-stage-secret-*`. Keep
+`csi.storage.k8s.io/node-publish-secret-*` during migration so PVs created by an
+older driver can still stage during publish. The external provisioner uses the
 provisioner Secret for both CreateVolume and DeleteVolume. Credentials are not
 stored in the generated PV.
 With `reclaimPolicy: Delete`, the driver deletes only the generated prefix for that
 PVC. Use `Retain` to preserve its objects after the PVC is removed.
 
-Set `addressingStyle: path` for path-style S3 services such as typical MinIO
-deployments. Set `addressingStyle: virtual` for services that require virtual-host
-requests, including Volcengine TOS and Alibaba Cloud OSS. The default is `path` for
-backward compatibility.
+Two endpoint forms are supported:
+
+* `endpointMode: service`: set a service endpoint plus `bucket`.
+* `endpointMode: bucket`: set a standard virtual-host endpoint such as
+  `https://bucket.oss.example.com`, or a path endpoint such as
+  `https://minio.example.com/bucket`. The driver derives the bucket and stores a
+  canonical service endpoint internally.
+
+Opaque CNAME and access-point endpoints cannot be reversed reliably. Configure
+their service endpoint and explicit bucket instead. `url` remains an alias for
+`endpoint` for existing PVs and StorageClasses.
+
+Set `addressingStyle: auto` to probe path and virtual-host addressing during
+dynamic provisioning and persist the result in the PV. Explicit `path` and
+`virtual` remain available; omitted values default to `path` for backward
+compatibility.
+
+The OSS node plugin advertises CSI stage/unstage support. It mounts s3fs once per
+volume and node, then bind-mounts the staging path into each pod. Existing PVs
+without a node-stage Secret are staged during the first NodePublish call using
+their node-publish Secret.
 
 Runnable manifests are available in `example/oss/dynamic/`.
 
@@ -237,7 +256,8 @@ spec:
     volumeHandle: <name of the pv>
     volumeAttributes:
       bucket: "***"
-      url: "http://oss-cnbj01.cdsgss.com"
+      endpoint: "http://oss-cnbj01.cdsgss.com"
+      endpointMode: "service"
       akId: "***"
       akSecret: "***"
       path: "***"
@@ -250,10 +270,24 @@ Description:
 | driver       | oss.csi.cds.net                | yes      | CDS csi driver's name                    |
 | volumeHandle | <name of the pv>               | yes      | Should be same with pv name              |
 | bucket       | <bucket name>                  | yes      | Register in CDS and get one unique name  |
-| url          | `http://oss-cnbj01.cdsgss.com` | yes      | Should be `http://oss-cnbj01.cdsgss.com` |
+| endpoint     | `http://oss-cnbj01.cdsgss.com` | yes      | S3 service endpoint; legacy `url` is also accepted |
 | akId         | <access_key>                   | yes      | Get it from your own bucket's in CDS web |
 | akSecret     | <acckedd_key_secret>           | yes      | Get it from your own bucket's in CDS web |
 | path         | <bucket_path>                  | yes      | Bucket path, default is `/`              |
+
+### OSS node image
+
+The OSS deployment uses a dedicated image containing the CSI binary, FUSE tools,
+and a checksum-pinned s3fs build. It no longer installs packages or a systemd
+service on Kubernetes nodes. Build the image with:
+
+```bash
+make oss-image OSS_IMAGE=harbor-dev.yun-paas.com/storage_image/cds-csi-driver-oss OSS_VERSION=v2.2.0
+```
+
+The node must expose `/dev/fuse`, and `/var/lib/kubelet` must be mounted into the
+node plugin with `mountPropagation: Bidirectional`, as configured by the release
+manifest.
 
 ## To use the EBS-DISK driver
 Examples can be found [here](!https://github.com/capitalonline/cds-csi-driver/tree/master/example/ebs_disk)
