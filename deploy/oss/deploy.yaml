@@ -304,7 +304,7 @@ spec:
           name: registration-dir
       - args:
         - --csi-address=/var/lib/kubelet/plugins/oss.csi.cds.net/csi.sock
-        - --health-port=9808
+        - --health-port=9811
         image: harbor-dev.yun-paas.com/csi_agent/csi-livenessprobe:v2.0.0
         name: oss-liveness-probe
         volumeMounts:

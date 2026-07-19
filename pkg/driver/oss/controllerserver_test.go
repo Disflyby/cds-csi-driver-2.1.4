@@ -9,6 +9,13 @@ import (
 	"github.com/minio/minio-go/v7"
 )
 
+func TestAutomaticAddressingPrefersVirtualHost(t *testing.T) {
+	want := [2]string{ossAddressingStyleVirtual, ossAddressingStylePath}
+	if got := automaticAddressingStyles(); got != want {
+		t.Fatalf("automaticAddressingStyles() = %v, want %v", got, want)
+	}
+}
+
 func TestDynamicVolumeIDRoundTrip(t *testing.T) {
 	want := dynamicVolumeRef{
 		Bucket: "bucket-a", Endpoint: "https://oss.example.test",

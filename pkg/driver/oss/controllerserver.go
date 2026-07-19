@@ -204,7 +204,7 @@ func resolveOssClient(ctx context.Context, ref dynamicVolumeRef, credentials Oss
 	}
 
 	var probeErrors []string
-	for _, style := range []string{ossAddressingStylePath, ossAddressingStyleVirtual} {
+	for _, style := range automaticAddressingStyles() {
 		candidate := ref
 		candidate.AddressingStyle = style
 		client, err := newOssClient(candidate, credentials)
@@ -223,6 +223,12 @@ func resolveOssClient(ctx context.Context, ref dynamicVolumeRef, credentials Oss
 		}
 	}
 	return nil, ref, fmt.Errorf("resolve OSS addressingStyle automatically: %s", strings.Join(probeErrors, "; "))
+}
+
+func automaticAddressingStyles() [2]string {
+	// Public S3 services generally require virtual-host addressing, while
+	// private S3-compatible endpoints commonly require path addressing.
+	return [2]string{ossAddressingStyleVirtual, ossAddressingStylePath}
 }
 
 func dynamicVolumeRefFromOpts(opts OssOpts) dynamicVolumeRef {
