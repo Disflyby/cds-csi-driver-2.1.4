@@ -16,7 +16,9 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -o /out/cds-csi-driver ./cmd/
 
 FROM ${RUNTIME_IMAGE}
-RUN apt-get update && apt-get install -y --no-install-recommends \
+COPY --from=driver-build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates util-linux && \
     rm -rf /var/lib/apt/lists/*
 COPY --from=driver-build /out/cds-csi-driver /cds-csi-driver
