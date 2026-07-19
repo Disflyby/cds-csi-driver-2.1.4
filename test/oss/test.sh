@@ -1,198 +1,101 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
-#!/usr/bin/env bash
-set -e
+: "${BUCKET:?set BUCKET to the S3 bucket name}"
+: "${ENDPOINT:?set ENDPOINT to the S3 service endpoint}"
+: "${AKID:?set AKID to the access key ID}"
+: "${AKSECRET:?set AKSECRET to the access key secret}"
 
-BUCKET="csi-testing-sjz"
-URL="http://oss-cnbj01.cdsgss.com"
-AKID="9200dc818c385ccf968e0a5d84abe458"
-AKS="19459552ac785d0483bdaf4d121d21e4"
-NAMESPACE="csi-test"
+NAMESPACE="${NAMESPACE:-csi-test}"
+NODE_NAME="${NODE_NAME:-worker001}"
+SECRET_NAME="oss-csi-test-credentials"
+PV_NAME="oss-csi-test-pv"
+PVC_NAME="oss-csi-test-pvc"
+POD_NAME="oss-csi-test"
 
-function cleanup(){
-    echo "=> cleaning up assets"
-    kubectl -n ${NAMESPACE} delete pod --all || true
-    kubectl -n ${NAMESPACE} delete pvc --all || true
-    kubectl delete pv --all || true
-    echo "=> Done!"
+cleanup() {
+    kubectl -n "${NAMESPACE}" delete pod "${POD_NAME}" --ignore-not-found --wait=true || true
+    kubectl -n "${NAMESPACE}" delete pvc "${PVC_NAME}" --ignore-not-found --wait=true || true
+    kubectl delete pv "${PV_NAME}" --ignore-not-found --wait=true || true
+    kubectl -n "${NAMESPACE}" delete secret "${SECRET_NAME}" --ignore-not-found || true
 }
+trap cleanup EXIT
 
-function case1(){
-    echo "=> Case 1: test case with static pv and path is exist in remote bucket"
-    echo "=> Case 1: let's create pod1 with persistentVolumeReclaimPolicy: Retain"
-    cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Pod
-metadata:
-  name: pod1
-  namespace: ${NAMESPACE}
-spec:
-  nodeName: worker001
-  containers:
-    - name: "hello-world"
-      image: "tutum/hello-world"
-      volumeMounts:
-        - name: pvc-oss
-          mountPath: "/data"
-  volumes:
-    - name: pvc-oss
-      persistentVolumeClaim:
-        claimName: pvc1
----
-kind: PersistentVolumeClaim
-apiVersion: v1
-metadata:
-  name: pvc1
-  namespace: ${NAMESPACE}
-spec:
-  accessModes:
-    - ReadWriteMany
-  resources:
-    requests:
-      storage: 2Gi
----
+kubectl create namespace "${NAMESPACE}" --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n "${NAMESPACE}" create secret generic "${SECRET_NAME}" \
+    --from-literal=akId="${AKID}" \
+    --from-literal=akSecret="${AKSECRET}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+
+cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: pv1
+  name: ${PV_NAME}
 spec:
   capacity:
-    storage: 2Gi
+    storage: 1Gi
   accessModes:
     - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
   csi:
     driver: oss.csi.cds.net
-    # set volumeHandle same value pv name
-    volumeHandle: pv1
+    volumeHandle: ${PV_NAME}
     volumeAttributes:
       bucket: ${BUCKET}
-      url: ${URL}
-      akId: ${AKID}
-      akSecret: ${AKS}
-      path: "/data"
-EOF
-    kubectl -n ${NAMESPACE} wait --for condition=Ready pod/pod1 --timeout 30s
-
-    echo "=> Case 1: test if pod1 is created"
-    kubectl -n ${NAMESPACE} get pod pod1
-    echo "=> Done!"
-
-    echo "=> Case 1: test if pvc1 is created"
-    kubectl -n ${NAMESPACE} get pvc pvc1
-    echo "=> Done!"
-
-    echo "=> Case 1: test if pv1 is created"
-    kubectl -n ${NAMESPACE} get pv pv1
-    echo "=> Done!"
-
-    echo "=> Case 1: test if bucket is mounted to pod1, please check it manually"
-    ansible worker001 -m shell -a "df -h | grep s3fs"
-    echo "=> Done!"
-
-    echo "=> Case 1: let's remove pod1 as well as pvc1"
-    kubectl -n ${NAMESPACE} delete pod pod1
-    kubectl -n ${NAMESPACE} delete pvc pvc1
-    echo "=> Done"
-
-    echo "=> let's delete pv1"
-    kubectl delete pv pv1
-    echo "=> Done"
-
-    echo "=> Case 1: test if bucket is unmounted from pod1, please check it manually"
-    ansible worker001 -m shell -a "df -h | grep s3fs"
-    echo "=> Done!"
-
-    echo "Case 1: Passed"
-    cleanup
-}
-
-function case2(){
-    echo "=> Case 1: test case with static pv and path is not exist in remote bucket"
-    echo "=> Case 1: let's create pod1 with persistentVolumeReclaimPolicy: Retain"
-    cat <<EOF | kubectl apply -f -
+      endpoint: ${ENDPOINT}
+      path: /
+    nodeStageSecretRef:
+      name: ${SECRET_NAME}
+      namespace: ${NAMESPACE}
+    nodePublishSecretRef:
+      name: ${SECRET_NAME}
+      namespace: ${NAMESPACE}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ${PVC_NAME}
+  namespace: ${NAMESPACE}
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  volumeName: ${PV_NAME}
+  resources:
+    requests:
+      storage: 1Gi
+---
 apiVersion: v1
 kind: Pod
 metadata:
-  name: pod1
+  name: ${POD_NAME}
   namespace: ${NAMESPACE}
 spec:
-  nodeName: worker001
+  nodeName: ${NODE_NAME}
+  restartPolicy: Never
   containers:
-    - name: "hello-world"
-      image: "tutum/hello-world"
+    - name: test
+      image: busybox:1.36.1
+      command:
+        - /bin/sh
+        - -ec
+        - |
+          value="geesefs-$(date +%s)"
+          printf '%s' "$value" > /data/csi-rw-test
+          test "$(cat /data/csi-rw-test)" = "$value"
+          rm -f /data/csi-rw-test
       volumeMounts:
-        - name: pvc-oss
-          mountPath: "/data"
+        - name: storage
+          mountPath: /data
   volumes:
-    - name: pvc-oss
+    - name: storage
       persistentVolumeClaim:
-        claimName: pvc1
----
-kind: PersistentVolumeClaim
-apiVersion: v1
-metadata:
-  name: pvc1
-  namespace: ${NAMESPACE}
-spec:
-  accessModes:
-    - ReadWriteMany
-  resources:
-    requests:
-      storage: 2Gi
----
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: pv1
-spec:
-  capacity:
-    storage: 2Gi
-  accessModes:
-    - ReadWriteMany
-  persistentVolumeReclaimPolicy: Retain
-  csi:
-    driver: oss.csi.cds.net
-    # set volumeHandle same value pv name
-    volumeHandle: pv1
-    volumeAttributes:
-      bucket: ${BUCKET}
-      url: ${URL}
-      akId: ${AKID}
-      akSecret: ${AKS}
-      path: "/tmp"
+        claimName: ${PVC_NAME}
 EOF
-    kubectl -n ${NAMESPACE} wait --for condition=Ready pod/pod1 --timeout 30s
 
-    echo "=> Case 1: test if pod1 is created"
-    kubectl -n ${NAMESPACE} get pod pod1
-    echo "=> Done!"
-
-    echo "=> Case 1: test if pvc1 is created"
-    kubectl -n ${NAMESPACE} get pvc pvc1
-    echo "=> Done!"
-
-    echo "=> Case 1: test if pv1 is created"
-    kubectl -n ${NAMESPACE} get pv pv1
-    echo "=> Done!"
-
-    echo "=> Case 1: test if pod is not running and log shows that remote bucket path is not exist"
-    kubectl describe pods pod1 -n ${NAMESPACE} | grep Remote
-    echo "=> Done!"
-
-    echo "=> Case 1: let's remove pod1 as well as pvc1"
-    kubectl -n ${NAMESPACE} delete pod pod1
-    kubectl -n ${NAMESPACE} delete pvc pvc1
-    echo "=> Done"
-
-    echo "=> let's delete pv1"
-    kubectl delete pv pv1
-    echo "=> Done"
-
-    echo "Case 1: Passed"
-    cleanup
-}
-
-case1
-case2
-
+kubectl -n "${NAMESPACE}" wait --for=jsonpath='{.status.phase}'=Succeeded \
+    "pod/${POD_NAME}" --timeout=120s
+kubectl -n "${NAMESPACE}" logs "${POD_NAME}"
+ansible "${NODE_NAME}" -m shell -a "findmnt -t fuse.geesefs"

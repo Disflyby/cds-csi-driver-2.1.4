@@ -5,7 +5,7 @@ FROM ${GO_IMAGE} AS driver-build
 WORKDIR /src
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
-ARG VERSION=v2.2.0
+ARG VERSION=v2.3.0
 ARG GIT_COMMIT=unknown
 ARG BUILD_DATE=unknown
 COPY go.mod go.sum ./
@@ -15,27 +15,9 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -ldflags "-X github.com/capitalonline/cds-csi-driver/pkg/common.version=${VERSION} -X github.com/capitalonline/cds-csi-driver/pkg/common.gitCommit=${GIT_COMMIT} -X github.com/capitalonline/cds-csi-driver/pkg/common.buildDate=${BUILD_DATE} -s -w" \
     -o /out/cds-csi-driver ./cmd/
 
-FROM debian:bookworm AS s3fs-build
-ARG S3FS_VERSION=v1.97
-ARG S3FS_SHA256=28413457cbf923b9b81e546caffabb8edd5c18f263e698ad86f564fd4b5b344d
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    autoconf automake ca-certificates curl g++ libcurl4-openssl-dev libfuse3-dev \
-    libssl-dev libtool libxml2-dev make pkg-config && \
-    rm -rf /var/lib/apt/lists/*
-WORKDIR /src
-RUN curl -fsSL "https://github.com/s3fs-fuse/s3fs-fuse/archive/refs/tags/${S3FS_VERSION}.tar.gz" -o s3fs.tar.gz && \
-    echo "${S3FS_SHA256}  s3fs.tar.gz" | sha256sum -c - && \
-    tar -xzf s3fs.tar.gz --strip-components=1 && \
-    ./autogen.sh && \
-    ./configure --prefix=/usr && \
-    make -j"$(nproc)" && \
-    make DESTDIR=/out install
-
 FROM ${RUNTIME_IMAGE}
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates fuse3 libcurl4 libssl3 libstdc++6 libxml2 media-types util-linux && \
-    printf 'user_allow_other\n' >> /etc/fuse.conf && \
+    ca-certificates util-linux && \
     rm -rf /var/lib/apt/lists/*
 COPY --from=driver-build /out/cds-csi-driver /cds-csi-driver
-COPY --from=s3fs-build /out/usr/bin/s3fs /usr/bin/s3fs
 ENTRYPOINT ["/cds-csi-driver"]

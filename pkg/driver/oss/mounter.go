@@ -2,11 +2,15 @@ package oss
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/capitalonline/cds-csi-driver/pkg/driver/oss/mountagent"
 )
 
 type Mounter interface {
@@ -19,11 +23,12 @@ type Mounter interface {
 }
 
 type commandMounter struct {
-	run func(context.Context, string, ...string) error
+	run        func(context.Context, string, ...string) error
+	socketPath string
 }
 
-func newS3FSMounter() Mounter {
-	return &commandMounter{run: runCommand}
+func newGeeseFSMounter() Mounter {
+	return &commandMounter{run: runCommand, socketPath: mountagent.SocketPath}
 }
 
 func runCommand(ctx context.Context, name string, args ...string) error {
@@ -35,7 +40,36 @@ func runCommand(ctx context.Context, name string, args ...string) error {
 }
 
 func (m *commandMounter) Mount(ctx context.Context, opts *PublishOptions, credentialFile string) error {
-	return m.run(ctx, "s3fs", s3fsMountArgs(opts, credentialFile)...)
+	request := mountagent.MountRequest{
+		Endpoint:        opts.Endpoint,
+		Bucket:          opts.Bucket,
+		Prefix:          opts.Path,
+		Target:          opts.NodePublishPath,
+		CredentialFile:  credentialFile,
+		AddressingStyle: opts.AddressingStyle,
+	}
+	connection, err := (&net.Dialer{}).DialContext(ctx, "unix", m.socketPath)
+	if err != nil {
+		return fmt.Errorf("connect to GeeseFS mount agent: %w", err)
+	}
+	defer connection.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = connection.SetDeadline(deadline)
+	}
+	if err := json.NewEncoder(connection).Encode(request); err != nil {
+		return fmt.Errorf("send GeeseFS mount request: %w", err)
+	}
+	response := mountagent.Response{}
+	if err := json.NewDecoder(connection).Decode(&response); err != nil {
+		return fmt.Errorf("read GeeseFS mount response: %w", err)
+	}
+	if !response.Success {
+		if response.Error == "" {
+			response.Error = "unknown error"
+		}
+		return fmt.Errorf("GeeseFS mount agent: %s", response.Error)
+	}
+	return nil
 }
 
 func (m *commandMounter) BindMount(ctx context.Context, source, target string, readOnly bool) error {
@@ -84,26 +118,4 @@ func (m *commandMounter) IsMounted(target string) (bool, error) {
 func unescapeMountInfoPath(value string) string {
 	replacer := strings.NewReplacer("\\040", " ", "\\011", "\t", "\\012", "\n", "\\134", "\\")
 	return replacer.Replace(value)
-}
-
-func s3fsMountArgs(opts *PublishOptions, credentialFile string) []string {
-	args := []string{
-		fmt.Sprintf("%s:%s", opts.Bucket, opts.Path),
-		opts.NodePublishPath,
-		"-o", "passwd_file=" + credentialFile,
-		"-o", "url=" + opts.Endpoint,
-	}
-	if opts.AddressingStyle == ossAddressingStylePath {
-		args = append(args, "-o", "use_path_request_style")
-	}
-	if opts.Region != "" {
-		args = append(args, "-o", "region="+opts.Region)
-	}
-	if opts.SignatureType == ossSignatureTypeV2 {
-		args = append(args, "-o", "sigv2")
-	}
-	for _, option := range defaultS3fsOptions {
-		args = append(args, "-o", option)
-	}
-	return args
 }

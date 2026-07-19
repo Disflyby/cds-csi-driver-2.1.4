@@ -22,14 +22,9 @@ import (
 
 type dynamicVolumeRef struct {
 	Bucket          string `json:"bucket"`
-	Endpoint        string `json:"endpoint,omitempty"`
-	URL             string `json:"url"`
+	Endpoint        string `json:"endpoint"`
 	Path            string `json:"path"`
-	EndpointMode    string `json:"endpointMode,omitempty"`
 	AddressingStyle string `json:"addressingStyle,omitempty"`
-	Region          string `json:"region,omitempty"`
-	SignatureType   string `json:"signatureType,omitempty"`
-	Mounter         string `json:"mounter,omitempty"`
 }
 
 type objectPutter interface {
@@ -87,13 +82,8 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 		VolumeContext: map[string]string{
 			"bucket":          ref.Bucket,
 			"endpoint":        ref.Endpoint,
-			"url":             ref.URL,
 			"path":            ref.Path,
-			"endpointMode":    ref.EndpointMode,
 			"addressingStyle": ref.AddressingStyle,
-			"region":          ref.Region,
-			"signatureType":   ref.SignatureType,
-			"mounter":         ref.Mounter,
 		},
 	}}, nil
 }
@@ -200,15 +190,10 @@ func newOssClient(ref dynamicVolumeRef, credentials OssCredentials) (*minio.Clie
 	if ref.AddressingStyle == ossAddressingStyleVirtual {
 		bucketLookup = minio.BucketLookupDNS
 	}
-	credentialProvider := minioCredentials.NewStaticV4(credentials.AccessKeyID, credentials.AccessKeySecret, "")
-	if ref.SignatureType == ossSignatureTypeV2 {
-		credentialProvider = minioCredentials.NewStaticV2(credentials.AccessKeyID, credentials.AccessKeySecret, "")
-	}
 	return minio.New(endpoint.Host, &minio.Options{
-		Creds:        credentialProvider,
+		Creds:        minioCredentials.NewStaticV4(credentials.AccessKeyID, credentials.AccessKeySecret, ""),
 		Secure:       endpoint.Scheme == "https",
 		BucketLookup: bucketLookup,
-		Region:       ref.Region,
 	})
 }
 
@@ -244,13 +229,8 @@ func dynamicVolumeRefFromOpts(opts OssOpts) dynamicVolumeRef {
 	return dynamicVolumeRef{
 		Bucket:          opts.Bucket,
 		Endpoint:        opts.Endpoint,
-		URL:             opts.URL,
 		Path:            opts.Path,
-		EndpointMode:    opts.EndpointMode,
 		AddressingStyle: opts.AddressingStyle,
-		Region:          opts.Region,
-		SignatureType:   opts.SignatureType,
-		Mounter:         opts.Mounter,
 	}
 }
 
@@ -258,13 +238,8 @@ func (ref dynamicVolumeRef) ossOpts() OssOpts {
 	return OssOpts{
 		Bucket:          ref.Bucket,
 		Endpoint:        ref.Endpoint,
-		URL:             ref.URL,
 		Path:            ref.Path,
-		EndpointMode:    ref.EndpointMode,
 		AddressingStyle: ref.AddressingStyle,
-		Region:          ref.Region,
-		SignatureType:   ref.SignatureType,
-		Mounter:         ref.Mounter,
 	}
 }
 

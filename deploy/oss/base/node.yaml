@@ -43,8 +43,8 @@ spec:
         - name: kubelet-dir
           mountPath: /var/lib/kubelet/
           mountPropagation: Bidirectional
-        - name: fuse-device
-          mountPath: /dev/fuse
+        - name: mount-agent-runtime
+          mountPath: /var/run/geesefs-mount-agent
         - name: host-log
           mountPath: /var/log/
         - name: host-etc
@@ -95,9 +95,9 @@ spec:
         hostPath:
           path: /etc
           type: Directory
-      - name: fuse-device
+      - name: mount-agent-runtime
         hostPath:
-          path: /dev/fuse
-          type: CharDevice
+          path: /var/run/geesefs-mount-agent
+          type: DirectoryOrCreate
   updateStrategy:
     type: "RollingUpdate"

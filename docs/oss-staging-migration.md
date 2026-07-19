@@ -1,15 +1,22 @@
-# OSS node staging migration
+# OSS GeeseFS host-mounter rollout
 
-Version `v2.2.0` changes OSS mounts from one s3fs process per pod publish target
-to one s3fs process per volume and node.
+Version `v2.3.0` replaces the old mount implementation with one GeeseFS mount
+per volume and node. GeeseFS and `geesefs-mount-agent` run on the Kubernetes
+host under systemd; the CSI Node Pod reaches the agent through a Unix socket.
+
+This release does not support old StorageClasses or PVs. Recreate test storage
+resources with the current parameter and Secret format before rollout.
 
 ## StorageClass requirements
 
-New dynamic StorageClasses should reference the same Secret for controller,
-node-stage, and node-publish operations:
+Use only a service endpoint, bucket, and optional base path. The driver probes
+path-style and virtual-host-style addressing automatically.
 
 ```yaml
 parameters:
+  endpoint: https://s3.example.com
+  bucket: project-data
+  path: /
   csi.storage.k8s.io/provisioner-secret-name: oss-csi-credentials
   csi.storage.k8s.io/provisioner-secret-namespace: default
   csi.storage.k8s.io/node-stage-secret-name: oss-csi-credentials
@@ -18,20 +25,20 @@ parameters:
   csi.storage.k8s.io/node-publish-secret-namespace: default
 ```
 
-PV objects retain their secret references when their StorageClass changes.
-Existing PVs without a node-stage Secret therefore use a compatibility path:
-NodeStage succeeds without mounting, and the first NodePublish stages the volume
-using its node-publish Secret before creating the bind mount.
-
-Do not remove node-publish Secret references until all pre-v2.2.0 PVs have been
-recreated or retired.
+The referenced Secret must contain `akId` and `akSecret`.
 
 ## Node rollout
 
-The new DaemonSet does not install `/srv/oss-server`, an `oss.service` unit, or a
-host s3fs package. Before rollout, verify every target node has `/dev/fuse` and
-supports bidirectional mount propagation for `/var/lib/kubelet`.
+On every schedulable node:
 
-After the DaemonSet is healthy, the old host service can be removed during a
-separate node-maintenance operation. The driver deliberately does not delete
-host packages or systemd units during rollout.
+1. Remove the legacy mount package.
+2. Install FUSE3 and enable `user_allow_other` in `/etc/fuse.conf`.
+3. Install `/usr/local/bin/geesefs` and
+   `/usr/local/bin/geesefs-mount-agent`.
+4. Enable and start `geesefs-mount-agent.service`.
+5. Verify `/var/run/geesefs-mount-agent/geesefs.sock` exists.
+6. Deploy the `v2.3.0` CSI controller and node manifests.
+
+The Node Pod does not mount `/dev/fuse`. It mounts the agent runtime directory
+and the kubelet root with bidirectional propagation. Active GeeseFS processes
+remain in the host systemd cgroup when the CSI Node Pod restarts.

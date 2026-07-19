@@ -17,14 +17,9 @@ kubectl create -f https://raw.githubusercontent.com/capitalonline/cds-csi-driver
 To deploy the CSI OSS driver to your k8s, simply run:
 
 ```bash
-# need install s3fs in host
-# ubuntu OS
-apt install s3fs -y
-
-# centos OS
-yum install s3fs -y
-
-# install csi 
+# Install GeeseFS and geesefs-mount-agent as a systemd service on every node.
+# aiinfra-manager performs this host installation automatically.
+# Then install the CSI controller and node plugin.
 kubectl create -f https://raw.githubusercontent.com/capitalonline/cds-csi-driver/master/deploy/oss/deploy.yaml
 ```
 
@@ -212,35 +207,19 @@ Examples can be found [here](!https://github.com/capitalonline/cds-csi-driver/tr
 Dynamic OSS volumes allocate one generated prefix per PVC beneath the StorageClass `path`.
 Create the credential Secret before applying the StorageClass, then apply the PVC. The
 StorageClass must set `csi.storage.k8s.io/provisioner-secret-*` and
-`csi.storage.k8s.io/node-stage-secret-*`. Keep
-`csi.storage.k8s.io/node-publish-secret-*` during migration so PVs created by an
-older driver can still stage during publish. The external provisioner uses the
+`csi.storage.k8s.io/node-stage-secret-*`. Keep the same
+`csi.storage.k8s.io/node-publish-secret-*` so the node can recover a missing
+staging mount during publish. The external provisioner uses the
 provisioner Secret for both CreateVolume and DeleteVolume. Credentials are not
 stored in the generated PV.
 With `reclaimPolicy: Delete`, the driver deletes only the generated prefix for that
 PVC. Use `Retain` to preserve its objects after the PVC is removed.
 
-Two endpoint forms are supported:
-
-* `endpointMode: service`: set a service endpoint plus `bucket`.
-* `endpointMode: bucket`: set a standard virtual-host endpoint such as
-  `https://bucket.oss.example.com`, or a path endpoint such as
-  `https://minio.example.com/bucket`. The driver derives the bucket and stores a
-  canonical service endpoint internally.
-
-Opaque CNAME and access-point endpoints cannot be reversed reliably. Configure
-their service endpoint and explicit bucket instead. `url` remains an alias for
-`endpoint` for existing PVs and StorageClasses.
-
-Set `addressingStyle: auto` to probe path and virtual-host addressing during
-dynamic provisioning and persist the result in the PV. Explicit `path` and
-`virtual` remain available; omitted values default to `path` for backward
-compatibility.
-
-The OSS node plugin advertises CSI stage/unstage support. It mounts s3fs once per
-volume and node, then bind-mounts the staging path into each pod. Existing PVs
-without a node-stage Secret are staged during the first NodePublish call using
-their node-publish Secret.
+Configure only the S3 service `endpoint`, `bucket`, and optional base `path`.
+The driver probes path-style and virtual-host-style addressing with the supplied
+credentials and persists the working style internally. The OSS node plugin asks
+the host mount agent to mount GeeseFS once per volume and node, then bind-mounts
+the staging path into each pod.
 
 Runnable manifests are available in `example/oss/dynamic/`.
 
@@ -257,10 +236,13 @@ spec:
     volumeAttributes:
       bucket: "***"
       endpoint: "http://oss-cnbj01.cdsgss.com"
-      endpointMode: "service"
-      akId: "***"
-      akSecret: "***"
-      path: "***"
+      path: "/"
+    nodeStageSecretRef:
+      name: oss-csi-credentials
+      namespace: default
+    nodePublishSecretRef:
+      name: oss-csi-credentials
+      namespace: default
 ```
 
 Description:
@@ -270,24 +252,24 @@ Description:
 | driver       | oss.csi.cds.net                | yes      | CDS csi driver's name                    |
 | volumeHandle | <name of the pv>               | yes      | Should be same with pv name              |
 | bucket       | <bucket name>                  | yes      | Register in CDS and get one unique name  |
-| endpoint     | `http://oss-cnbj01.cdsgss.com` | yes      | S3 service endpoint; legacy `url` is also accepted |
-| akId         | <access_key>                   | yes      | Get it from your own bucket's in CDS web |
-| akSecret     | <acckedd_key_secret>           | yes      | Get it from your own bucket's in CDS web |
-| path         | <bucket_path>                  | yes      | Bucket path, default is `/`              |
+| endpoint     | `http://oss-cnbj01.cdsgss.com` | yes      | S3 service endpoint                      |
+| path         | <bucket_path>                  | no       | Bucket path, default is `/`              |
+| nodeStageSecretRef | Secret reference          | yes      | Secret containing `akId` and `akSecret`  |
+| nodePublishSecretRef | Secret reference        | yes      | Same Secret used for publish recovery    |
 
-### OSS node image
+### OSS host mount service
 
-The OSS deployment uses a dedicated image containing the CSI binary, FUSE tools,
-and a checksum-pinned s3fs build. It no longer installs packages or a systemd
-service on Kubernetes nodes. Build the image with:
+The CSI image contains only the driver. GeeseFS and `geesefs-mount-agent` run on
+the Kubernetes host under systemd, so restarting the CSI Node Pod does not kill
+active FUSE mounts. Build the image and host-agent binaries with:
 
 ```bash
-make oss-image OSS_IMAGE=harbor-dev.yun-paas.com/storage_image/cds-csi-driver-oss OSS_VERSION=v2.2.1
+make oss-artifacts OSS_IMAGE=harbor-dev.yun-paas.com/storage_image/cds-csi-driver-oss OSS_VERSION=v2.3.0
 ```
 
-The node must expose `/dev/fuse`, and `/var/lib/kubelet` must be mounted into the
-node plugin with `mountPropagation: Bidirectional`, as configured by the release
-manifest.
+The host service requires FUSE3 and `/dev/fuse`. The CSI Node Pod only receives
+the agent socket plus `/var/lib/kubelet` with `mountPropagation: Bidirectional`,
+as configured by the release manifest.
 
 ## To use the EBS-DISK driver
 Examples can be found [here](!https://github.com/capitalonline/cds-csi-driver/tree/master/example/ebs_disk)

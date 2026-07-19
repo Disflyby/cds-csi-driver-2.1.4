@@ -16,15 +16,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-var errStageCredentialsUnavailable = errors.New("OSS credentials are unavailable for NodeStageVolume")
-
 const (
 	ossMountReadinessTimeout = 15 * time.Second
 	ossMountRollbackTimeout  = 10 * time.Second
 )
 
 func NewNodeServer(d *OssDriver) *NodeServer {
-	return newNodeServer(d, newS3FSMounter())
+	return newNodeServer(d, newGeeseFSMounter())
 }
 
 func newNodeServer(d *OssDriver, mounter Mounter) *NodeServer {
@@ -55,12 +53,6 @@ func (n *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolu
 	n.mountMu.Lock()
 	defer n.mountMu.Unlock()
 	err := n.stageVolume(ctx, req.GetVolumeId(), req.GetStagingTargetPath(), req.GetVolumeContext(), req.GetSecrets())
-	if errors.Is(err, errStageCredentialsUnavailable) {
-		// PVs created before STAGE_UNSTAGE support have only a node-publish
-		// secret. NodePublishVolume will use that secret to stage the volume.
-		log.Warnf("NodeStageVolume: credentials are unavailable for volume %s; deferring mount to NodePublishVolume", req.GetVolumeId())
-		return &csi.NodeStageVolumeResponse{}, nil
-	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "stage OSS volume: %v", err)
 	}
@@ -115,7 +107,18 @@ func (n *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 		return nil, status.Errorf(codes.Internal, "check OSS publish mount: %v", err)
 	}
 	if mounted {
-		return &csi.NodePublishVolumeResponse{}, nil
+		readinessCtx, cancelReadiness := context.WithTimeout(ctx, ossMountReadinessTimeout)
+		readinessErr := n.mounter.CheckReady(readinessCtx, req.GetTargetPath())
+		cancelReadiness()
+		if readinessErr == nil {
+			return &csi.NodePublishVolumeResponse{}, nil
+		}
+		rollbackCtx, cancelRollback := context.WithTimeout(context.Background(), ossMountRollbackTimeout)
+		rollbackErr := n.mounter.UnmountLazy(rollbackCtx, req.GetTargetPath())
+		cancelRollback()
+		if rollbackErr != nil {
+			return nil, status.Errorf(codes.Internal, "recover stale OSS publish mount: read: %v; unmount: %v", readinessErr, rollbackErr)
+		}
 	}
 
 	staged, err := n.mounter.IsMounted(req.GetStagingTargetPath())
@@ -155,11 +158,6 @@ func (n *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpub
 			return nil, status.Errorf(codes.Internal, "unpublish OSS volume: %v", err)
 		}
 	}
-	// Clean credentials left by the pre-staging implementation, where the
-	// credential file was scoped to each pod publish target.
-	if legacyCredentialFile, err := credentialFilePath(req.GetVolumeId(), req.GetTargetPath()); err == nil {
-		_ = removeOssCredential(legacyCredentialFile)
-	}
 	_ = os.Remove(req.GetTargetPath())
 	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
@@ -170,29 +168,16 @@ func (n *NodeServer) stageVolume(ctx context.Context, volumeID, stagingTargetPat
 		return fmt.Errorf("check mount point: %w", err)
 	}
 	if mounted {
-		if err := n.verifyStagingMount(ctx, stagingTargetPath); err != nil {
-			if credentialFile, pathErr := credentialFilePath(volumeID, stagingTargetPath); pathErr == nil {
-				_ = removeOssCredential(credentialFile)
-			}
-			return err
+		if err := n.verifyStagingMount(ctx, stagingTargetPath); err == nil {
+			return nil
 		}
-		return nil
+		log.Warnf("OSS staging mount %s is stale; remounting with GeeseFS", stagingTargetPath)
 	}
 
 	opts := ossOptsFromValues(values)
-	contextCredentials := OssCredentials{AccessKeyID: opts.AkID, AccessKeySecret: opts.AkSecret}
-	if contextCredentials.AccessKeyID != "" || contextCredentials.AccessKeySecret != "" {
-		log.Warnf("OSS credentials found in VolumeContext for volume %s; migrate them to a Kubernetes Secret", volumeID)
-	}
 	credentials := credentialsFromValues(secrets)
-	if credentials.AccessKeyID == "" {
-		credentials.AccessKeyID = contextCredentials.AccessKeyID
-	}
-	if credentials.AccessKeySecret == "" {
-		credentials.AccessKeySecret = contextCredentials.AccessKeySecret
-	}
 	if !credentials.valid() {
-		return errStageCredentialsUnavailable
+		return errors.New("OSS credentials are required through the node-stage or node-publish secret")
 	}
 	if err := opts.parsOssOpts(); err != nil {
 		return err
@@ -204,8 +189,6 @@ func (n *NodeServer) stageVolume(ctx context.Context, volumeID, stagingTargetPat
 		}
 		opts.AddressingStyle = resolvedRef.AddressingStyle
 	}
-	opts.AkID = credentials.AccessKeyID
-	opts.AkSecret = credentials.AccessKeySecret
 	publishOpts := PublishOptions{OssOpts: opts, NodePublishPath: stagingTargetPath}
 
 	credentialFile, err := credentialFilePath(volumeID, stagingTargetPath)
@@ -232,7 +215,7 @@ func (n *NodeServer) stageVolume(ctx context.Context, volumeID, stagingTargetPat
 		return fmt.Errorf("verify staging mount: %w", err)
 	}
 	if !mounted {
-		return errors.New("s3fs exited without creating the staging mount")
+		return errors.New("GeeseFS mount agent returned without creating the staging mount")
 	}
 	if err := n.verifyStagingMount(ctx, stagingTargetPath); err != nil {
 		return err

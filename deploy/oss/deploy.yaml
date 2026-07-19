@@ -175,7 +175,7 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
-        image: harbor-dev.yun-paas.com/storage_image/cds-csi-driver-oss:v2.2.1
+        image: harbor-dev.yun-paas.com/storage_image/cds-csi-driver-oss:v2.3.0
         imagePullPolicy: Always
         name: csi-controller-server
         resources:
@@ -258,7 +258,7 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
-        image: harbor-dev.yun-paas.com/storage_image/cds-csi-driver-oss:v2.2.1
+        image: harbor-dev.yun-paas.com/storage_image/cds-csi-driver-oss:v2.3.0
         imagePullPolicy: Always
         name: oss-csi-node-server
         securityContext:
@@ -271,8 +271,8 @@ spec:
         - mountPath: /var/lib/kubelet/
           mountPropagation: Bidirectional
           name: kubelet-dir
-        - mountPath: /dev/fuse
-          name: fuse-device
+        - mountPath: /var/run/geesefs-mount-agent
+          name: mount-agent-runtime
         - mountPath: /var/log/
           name: host-log
         - mountPath: /host/etc
@@ -333,9 +333,9 @@ spec:
           type: Directory
         name: host-etc
       - hostPath:
-          path: /dev/fuse
-          type: CharDevice
-        name: fuse-device
+          path: /var/run/geesefs-mount-agent
+          type: DirectoryOrCreate
+        name: mount-agent-runtime
   updateStrategy:
     type: RollingUpdate
 ---

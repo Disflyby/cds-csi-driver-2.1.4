@@ -7,11 +7,7 @@ reclaimPolicy: Delete
 parameters:
   bucket: "replace-with-bucket"
   endpoint: "https://oss.example.com"
-  endpointMode: "service"
   path: "/kubernetes"
-  addressingStyle: "auto"
-  signatureType: "v4"
-  mounter: "s3fs"
   csi.storage.k8s.io/provisioner-secret-name: oss-csi-credentials
   csi.storage.k8s.io/provisioner-secret-namespace: default
   csi.storage.k8s.io/node-stage-secret-name: oss-csi-credentials

@@ -27,7 +27,7 @@ CSI Identity / Controller / Node Server
 | 驱动名 | 模型 | 核心用途 | 关键差异 |
 | --- | --- | --- | --- |
 | `nas.csi.cds.net` | NFS，共享读写 | NAS 静态/动态卷 | `subpath` 创建目录；`filesystem` 创建独占 CDS NAS |
-| `oss.csi.cds.net` | S3FS，共享读写 | 将 OSS Bucket 挂载到节点 staging path，再 bind mount 到 Pod | CSI Node 镜像内置固定版本 `s3fs` |
+| `oss.csi.cds.net` | GeeseFS，共享读写 | 将 OSS Bucket 挂载到节点 staging path，再 bind mount 到 Pod | 宿主机 GeeseFS 由 systemd mount agent 管理 |
 | `disk.csi.cds.net` | 云块盘 | 传统 CDS Disk | 控制器会轮询云任务；可定时同步 PV/Node topology |
 | `ccs-disk.csi.cds.net` | 云块盘，单节点写 | CCS 集群磁盘 | ConfigMap 持久化卷记录，并使用每卷锁 |
 | `ebs-disk.csi.cds.net` | 云块盘，单节点写 | EBS 磁盘 | 格式化状态保存到 `kube-system/ebs-formated` |
@@ -42,7 +42,7 @@ CreateVolume -> 云 API 创建卷 -> ControllerPublishVolume 附着到节点
 -> NodeUnpublish/Unstage -> ControllerUnpublishVolume -> DeleteVolume
 ```
 
-NAS、OSS 不需要控制器附着：`CSIDriver.spec.attachRequired: false`。NAS 节点直接 NFS 挂载；OSS 节点通过 `NodeStageVolume` 在每个节点挂载一次 `s3fs`，再由 `NodePublishVolume` bind mount 到 Pod。
+NAS、OSS 不需要控制器附着：`CSIDriver.spec.attachRequired: false`。NAS 节点直接 NFS 挂载；OSS 的 `NodeStageVolume` 通过 Unix socket 请求宿主机 mount agent 启动 GeeseFS，再由 `NodePublishVolume` bind mount 到 Pod。
 
 ## 从哪里开始读
 
@@ -51,7 +51,7 @@ NAS、OSS 不需要控制器附着：`CSIDriver.spec.attachRequired: false`。NA
 | 驱动选择与启动 | `cmd/main.go` | 解析 `--endpoint`、`--driver`、`--nodeid`、`--rootdir` 并启动 gRPC 服务 |
 | 统一能力与系统操作 | `pkg/driver/utils/` | 节点 ID、shell 命令、挂载检查、目录、容量指标、EKS HTTP 签名客户端 |
 | NAS | `pkg/driver/nas/` | NFS 参数、NAS API 调用、服务器选择和目录生命周期 |
-| OSS | `pkg/driver/oss/`、`Dockerfile.oss` | Endpoint 规范化、S3FS mounter、staging 生命周期和固定版本镜像 |
+| OSS | `pkg/driver/oss/`、`cmd/geesefs-mount-agent/`、`Dockerfile.oss` | Endpoint 规范化、宿主机 GeeseFS 代理和 staging 生命周期 |
 | 传统 Disk | `pkg/driver/disk/` | CDS Disk SDK 与块设备操作 |
 | CCS Disk | `pkg/driver/ccsdisk/` | 持久化卷记录、并发锁、CCS Disk SDK |
 | EBS Disk | `pkg/driver/ebs_disk/` | EBS SDK、设备 order 定位、格式化 ConfigMap |
@@ -100,11 +100,11 @@ NAS、OSS 不需要控制器附着：`CSIDriver.spec.attachRequired: false`。NA
 | NAS、Disk、EBS | `cck-secrets`、`cds-properties` | Access Key/Secret、海外标记、部分集群 ID |
 | CCS | `ccs-secrets`、`cds-properties` | Access Key/Secret、站点和海外标记 |
 | EKS | `eks-secrets`、`cds-properties` | `CDS_ACCESS_KEY_*`、集群 ID、OpenAPI host |
-| OSS | PV `volumeAttributes` | bucket、endpoint、AK/SK、path |
+| OSS | StorageClass + Secret | endpoint、bucket、path；AK/SK 仅保存在 Secret 中 |
 
 ## 本地开发与验证
 
-项目目标平台是 Linux。当前 Dockerfile 基于 `golang:1.18-alpine` 构建，并为运行镜像安装 FUSE、文件系统工具和 NVMe 工具。
+项目目标平台是 Linux。OSS CSI 镜像只包含驱动本身；GeeseFS 与 mount agent 由 manager 安装到宿主机。
 
 在 Linux 或 Linux 容器中：
 
@@ -120,11 +120,11 @@ make unit-test
 cmd /c "set GOOS=linux&&set GOARCH=amd64&&set CGO_ENABLED=0&&go build ./..."
 ```
 
-已验证上面的 Linux 目标交叉编译可通过。`make integration-test` 会依次运行 NAS 和 OSS 集成脚本，需要可访问的 Kubernetes 集群；NAS 还需要 NFS 服务器，OSS 需要真实 Bucket、节点 `/dev/fuse` 和双向 mount propagation。
+已验证上面的 Linux 目标交叉编译可通过。`make integration-test` 会依次运行 NAS 和 OSS 集成脚本，需要可访问的 Kubernetes 集群；NAS 还需要 NFS 服务器，OSS 需要真实 Bucket、宿主机 FUSE3/GeeseFS/mount agent，以及 `/var/lib/kubelet` 的双向 mount propagation。
 
 ## 先知道的限制和风险
 
-1. 发布版本不一致：Makefile 的版本为 `v2.1.4`，但生成部署清单混用 `v2.0.4`、`v2.1.3` 和专用 EKS 镜像。部署前必须确认实际镜像与代码版本。
+1. OSS 发布版本为 `v2.3.0`；其他后端仍有自己的历史版本。部署前必须确认实际镜像与代码版本。
 2. CSI/Kubernetes 依赖较旧：CSI spec 为 `v1.2.0`，Kubernetes client 为 `v0.17`，sidecar 版本也并不统一。升级集群前需要做兼容性验证。
 3. 自动化测试覆盖很少：仅有一个 Go 单测；集成脚本主要覆盖 NAS 和 OSS，Disk/EBS 测试脚本为空。
 4. OSS 测试脚本中曾提交明文访问凭证。不要复用；应轮换凭证并改为通过 Secret 或 CI 密钥注入。

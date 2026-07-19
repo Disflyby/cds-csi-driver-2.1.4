@@ -3,9 +3,7 @@ HARBOR_REPOSITORY?=harbor-dev.yun-paas.com/csi_agent
 IMAGE?=$(HARBOR_REPOSITORY)/cds-csi-driver
 VERSION?=v2.1.5
 OSS_IMAGE?=harbor-dev.yun-paas.com/storage_image/cds-csi-driver-oss
-OSS_VERSION?=v2.2.1
-S3FS_VERSION?=v1.97
-S3FS_SHA256?=28413457cbf923b9b81e546caffabb8edd5c18f263e698ad86f564fd4b5b344d
+OSS_VERSION?=v2.3.0
 GIT_COMMIT?=$(shell git rev-parse HEAD)
 BUILD_DATE?=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS?="-X ${PKG}/pkg/common.version=${VERSION} -X ${PKG}/pkg/common.gitCommit=${GIT_COMMIT} -X ${PKG}/pkg/common.buildDate=${BUILD_DATE} -s -w"
@@ -33,6 +31,15 @@ build:
 container-binary:
 	CGO_ENABLED=0 GOARCH="amd64" GOOS="linux" go build -ldflags ${LDFLAGS} -o /cds-csi-driver ./cmd/
 
+.PHONY: geesefs-mount-agent
+geesefs-mount-agent:
+	mkdir -p dist
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildvcs=false -trimpath -ldflags "-s -w" -o dist/geesefs-mount-agent-linux-amd64 ./cmd/geesefs-mount-agent
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -buildvcs=false -trimpath -ldflags "-s -w" -o dist/geesefs-mount-agent-linux-arm64 ./cmd/geesefs-mount-agent
+
+.PHONY: oss-artifacts
+oss-artifacts: oss-image geesefs-mount-agent
+
 .PHONY: image-release
 image-release:
 	docker build -t $(IMAGE):$(VERSION) .
@@ -47,8 +54,6 @@ oss-image:
 		--build-arg VERSION=$(OSS_VERSION) \
 		--build-arg GIT_COMMIT=$(GIT_COMMIT) \
 		--build-arg BUILD_DATE=$(BUILD_DATE) \
-		--build-arg S3FS_VERSION=$(S3FS_VERSION) \
-		--build-arg S3FS_SHA256=$(S3FS_SHA256) \
 		-t $(OSS_IMAGE):$(OSS_VERSION) .
 
 .PHONY: release
