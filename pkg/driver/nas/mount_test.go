@@ -145,8 +145,50 @@ func TestDeterministicServerSelection(t *testing.T) {
 }
 
 func TestDeleteNFSSubpathRejectsInvalidPathBeforeMount(t *testing.T) {
-	if err := deleteNFSSubpath("nfs.example", "/nfsshare/../etc", "4.0", t.TempDir(), "pvc-123", false); err == nil {
+	if err := deleteNFSSubpath("nfs.example", "/nfsshare", "../etc", "4.0", t.TempDir(), false); err == nil {
 		t.Fatal("deleteNFSSubpath() error = nil for a traversal path")
+	}
+}
+
+func TestCreateDynamicNasSubDirRejectsExistingUnmarkedDirectory(t *testing.T) {
+	originalRunNFSCommand := runNFSCommand
+	runNFSCommand = func(name string, args ...string) (string, error) {
+		return "", nil
+	}
+	defer func() { runNFSCommand = originalRunNFSCommand }()
+
+	mountRoot := t.TempDir()
+	remoteSubDir := filepath.Join(mountRoot, "pvc-123", "pvc-123")
+	if err := os.MkdirAll(remoteSubDir, 0755); err != nil {
+		t.Fatalf("create existing remote subdirectory: %v", err)
+	}
+	opts := &NfsOpts{Server: "nfs.example", Path: "/", Vers: "4.0"}
+	if err := opts.createDynamicNasSubDir(mountRoot, "pvc-123"); err == nil {
+		t.Fatal("createDynamicNasSubDir() error = nil for an existing unmarked directory")
+	}
+	if _, err := os.Stat(filepath.Join(remoteSubDir, dynamicSubpathMarker)); !os.IsNotExist(err) {
+		t.Fatalf("unexpected marker was created, stat error = %v", err)
+	}
+}
+
+func TestCreateDynamicNasSubDirAcceptsMatchingMarker(t *testing.T) {
+	originalRunNFSCommand := runNFSCommand
+	runNFSCommand = func(name string, args ...string) (string, error) {
+		return "", nil
+	}
+	defer func() { runNFSCommand = originalRunNFSCommand }()
+
+	mountRoot := t.TempDir()
+	remoteSubDir := filepath.Join(mountRoot, "pvc-123", "pvc-123")
+	if err := os.MkdirAll(remoteSubDir, 0755); err != nil {
+		t.Fatalf("create existing remote subdirectory: %v", err)
+	}
+	if err := ensureVolumeMarker(remoteSubDir, "pvc-123"); err != nil {
+		t.Fatalf("create marker: %v", err)
+	}
+	opts := &NfsOpts{Server: "nfs.example", Path: "/", Vers: "4.0"}
+	if err := opts.createDynamicNasSubDir(mountRoot, "pvc-123"); err != nil {
+		t.Fatalf("createDynamicNasSubDir() error = %v", err)
 	}
 }
 
@@ -157,9 +199,151 @@ func TestDeleteNFSSubpathPropagatesMountFailure(t *testing.T) {
 	}
 	defer func() { runNFSCommand = originalRunNFSCommand }()
 
-	err := deleteNFSSubpath("nfs.example", "/nfsshare/pvc-123", "4.0", t.TempDir(), "pvc-123", false)
+	err := deleteNFSSubpath("nfs.example", "/nfsshare", "pvc-123", "4.0", t.TempDir(), false)
 	if err == nil {
 		t.Fatal("deleteNFSSubpath() error = nil when mount fails")
+	}
+}
+
+func TestDeleteNFSSubpathRequiresMatchingMarker(t *testing.T) {
+	originalRunNFSCommand := runNFSCommand
+	runNFSCommand = func(name string, args ...string) (string, error) {
+		return "", nil
+	}
+	defer func() { runNFSCommand = originalRunNFSCommand }()
+
+	mountRoot := t.TempDir()
+	deletePath := filepath.Join(mountRoot, "pvc-123-delete", "pvc-123")
+	if err := os.MkdirAll(deletePath, 0755); err != nil {
+		t.Fatalf("create delete path: %v", err)
+	}
+	if err := ensureVolumeMarker(deletePath, "pvc-other"); err != nil {
+		t.Fatalf("create mismatched marker: %v", err)
+	}
+
+	err := deleteNFSSubpath("nfs.example", "/", "pvc-123", "4.0", mountRoot, false)
+	if err == nil {
+		t.Fatal("deleteNFSSubpath() error = nil for a mismatched marker")
+	}
+	if _, err := os.Stat(deletePath); err != nil {
+		t.Fatalf("delete path was changed despite marker mismatch: %v", err)
+	}
+}
+
+func TestDeleteNFSSubpathRejectsMissingMarker(t *testing.T) {
+	originalRunNFSCommand := runNFSCommand
+	runNFSCommand = func(name string, args ...string) (string, error) {
+		return "", nil
+	}
+	defer func() { runNFSCommand = originalRunNFSCommand }()
+
+	mountRoot := t.TempDir()
+	deletePath := filepath.Join(mountRoot, "pvc-123-delete", "pvc-123")
+	if err := os.MkdirAll(deletePath, 0755); err != nil {
+		t.Fatalf("create delete path: %v", err)
+	}
+
+	if err := deleteNFSSubpath("nfs.example", "/", "pvc-123", "4.0", mountRoot, false); err == nil {
+		t.Fatal("deleteNFSSubpath() error = nil for a missing marker")
+	}
+	if _, err := os.Stat(deletePath); err != nil {
+		t.Fatalf("delete path was changed despite missing marker: %v", err)
+	}
+}
+
+func TestDeleteNFSSubpathDeletesMatchingDirectory(t *testing.T) {
+	originalRunNFSCommand := runNFSCommand
+	var mountArgs []string
+	runNFSCommand = func(name string, args ...string) (string, error) {
+		if name == "mount" {
+			mountArgs = append([]string(nil), args...)
+		}
+		return "", nil
+	}
+	defer func() { runNFSCommand = originalRunNFSCommand }()
+
+	mountRoot := t.TempDir()
+	deletePath := filepath.Join(mountRoot, "pvc-123-delete", "pvc-123")
+	if err := os.MkdirAll(deletePath, 0755); err != nil {
+		t.Fatalf("create delete path: %v", err)
+	}
+	if err := ensureVolumeMarker(deletePath, "pvc-123"); err != nil {
+		t.Fatalf("create marker: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(deletePath, "data"), []byte("payload"), 0600); err != nil {
+		t.Fatalf("create volume data: %v", err)
+	}
+
+	if err := deleteNFSSubpath("nfs.example", "/", "pvc-123", "4.0", mountRoot, false); err != nil {
+		t.Fatalf("deleteNFSSubpath() error = %v", err)
+	}
+	if _, err := os.Stat(deletePath); !os.IsNotExist(err) {
+		t.Fatalf("delete path still exists, stat error = %v", err)
+	}
+	wantSource := "nfs.example:/"
+	if len(mountArgs) < 2 || mountArgs[len(mountArgs)-2] != wantSource {
+		t.Fatalf("mount args = %#v, want source %q", mountArgs, wantSource)
+	}
+}
+
+func TestDeleteNFSSubpathMissingDirectoryIsIdempotent(t *testing.T) {
+	originalRunNFSCommand := runNFSCommand
+	runNFSCommand = func(name string, args ...string) (string, error) {
+		return "", nil
+	}
+	defer func() { runNFSCommand = originalRunNFSCommand }()
+
+	if err := deleteNFSSubpath("nfs.example", "/exports/team-a", "pvc-missing", "4.0", t.TempDir(), false); err != nil {
+		t.Fatalf("deleteNFSSubpath() error for missing directory = %v", err)
+	}
+}
+
+func TestDeleteNFSSubpathArchivesMatchingDirectory(t *testing.T) {
+	originalRunNFSCommand := runNFSCommand
+	runNFSCommand = func(name string, args ...string) (string, error) {
+		return "", nil
+	}
+	defer func() { runNFSCommand = originalRunNFSCommand }()
+
+	mountRoot := t.TempDir()
+	mountPoint := filepath.Join(mountRoot, "pvc-123-delete")
+	deletePath := filepath.Join(mountPoint, "pvc-123")
+	if err := os.MkdirAll(deletePath, 0755); err != nil {
+		t.Fatalf("create delete path: %v", err)
+	}
+	if err := ensureVolumeMarker(deletePath, "pvc-123"); err != nil {
+		t.Fatalf("create marker: %v", err)
+	}
+
+	if err := deleteNFSSubpath("nfs.example", "/exports", "pvc-123", "4.0", mountRoot, true); err != nil {
+		t.Fatalf("deleteNFSSubpath() archive error = %v", err)
+	}
+	if _, err := os.Stat(deletePath); !os.IsNotExist(err) {
+		t.Fatalf("original delete path still exists, stat error = %v", err)
+	}
+	archives, err := filepath.Glob(filepath.Join(mountPoint, "archived-pvc-123.*"))
+	if err != nil || len(archives) != 1 {
+		t.Fatalf("archived paths = %#v, error = %v", archives, err)
+	}
+	exists, err := volumeMarkerExists(archives[0], "pvc-123")
+	if err != nil || !exists {
+		t.Fatalf("archived marker = (%t, %v), want (true, nil)", exists, err)
+	}
+}
+
+func TestResolveDynamicVolumePath(t *testing.T) {
+	volumePath, err := resolveDynamicVolumePath("/", "pvc-123")
+	if err != nil {
+		t.Fatalf("resolveDynamicVolumePath() error = %v", err)
+	}
+	if volumePath != "/pvc-123" {
+		t.Fatalf("resolveDynamicVolumePath() = %q, want %q", volumePath, "/pvc-123")
+	}
+
+	for _, subDir := range []string{"", ".", "..", "pvc/child", `pvc\\child`, "pvc..child"} {
+		if _, err := resolveDynamicVolumePath("/exports", subDir); err == nil {
+			t.Fatalf("resolveDynamicVolumePath(%q) error = nil", subDir)
+		}
 	}
 }
 

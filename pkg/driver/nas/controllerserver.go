@@ -1,10 +1,12 @@
 package nas
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 
@@ -81,6 +83,9 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 	if err := validateVolumeID(req.GetName()); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume name: %v", err)
 	}
+	if err := validateDynamicSubDir(req.GetName()); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid dynamic volume name: %v", err)
+	}
 
 	pvName := req.GetName()
 	if value, ok := processedPvc.Load(pvName); ok && value != nil {
@@ -105,18 +110,19 @@ func (c *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVolu
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "parse NFS subpath options: %v", err)
 	}
-	if err := opts.createDynamicNasSubDir(createVolumeRoot, pvName); err != nil {
-		utils.SentrySendError(fmt.Errorf("CreateVolume:: nas, failed to create subpath on the NAS server: %s", err))
-		return nil, status.Errorf(codes.Internal, "create NFS subpath: %v", err)
-	}
-
 	volumeID, err := encodeNasDynamicVolumeID(nasDynamicVolumeRef{
-		Server: opts.Server,
-		Path:   opts.Path,
-		Vers:   opts.Vers,
+		Server:          opts.Server,
+		BasePath:        opts.Path,
+		SubDir:          pvName,
+		Vers:            opts.Vers,
+		ArchiveOnDelete: opts.ArchiveOnDelete,
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "encode NAS volume ID: %v", err)
+	}
+	if err := opts.createDynamicNasSubDir(createVolumeRoot, pvName); err != nil {
+		utils.SentrySendError(fmt.Errorf("CreateVolume:: nas, failed to create subpath on the NAS server: %s", err))
+		return nil, status.Errorf(codes.Internal, "create NFS subpath: %v", err)
 	}
 
 	volToCreate := &csi.Volume{
@@ -140,15 +146,19 @@ func (c *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolu
 	// depend on the PV or StorageClass still existing in the API.
 	ref, dynamic, decodeErr := decodeNasDynamicVolumeID(req.GetVolumeId())
 	if decodeErr != nil {
-		log.Warnf("DeleteVolume: failed to decode dynamic volume ID, falling back to k8s API: %v", decodeErr)
+		if dynamic {
+			return nil, status.Errorf(codes.FailedPrecondition, "decode NAS volume ID: %v", decodeErr)
+		}
+		return nil, status.Errorf(codes.InvalidArgument, "decode NAS volume ID: %v", decodeErr)
 	}
 	if dynamic {
-		log.Infof("DeleteVolume: decoded dynamic volume ref server=%s path=%s vers=%s", ref.Server, ref.Path, ref.Vers)
-		if err := deleteNFSSubpath(ref.Server, ref.Path, ref.Vers, deleteVolumeRoot, req.GetVolumeId(), false); err != nil {
+		defer lockSubpathCreate(ref.SubDir)()
+		log.Infof("DeleteVolume: decoded dynamic volume ref server=%s basePath=%s subDir=%s vers=%s", ref.Server, ref.BasePath, ref.SubDir, ref.Vers)
+		if err := deleteNFSSubpath(ref.Server, ref.BasePath, ref.SubDir, ref.Vers, deleteVolumeRoot, ref.ArchiveOnDelete); err != nil {
 			utils.SentrySendError(fmt.Errorf("DeleteVolume:: nas, delete NFS subpath: %s", err))
 			return nil, status.Errorf(codes.Aborted, "delete NFS subpath for volume %s: %v", req.VolumeId, err)
 		}
-		processedPvc.Delete(req.VolumeId)
+		processedPvc.Delete(ref.SubDir)
 		log.Infof("DeleteVolume:: volume %s has been deleted successfully", req.VolumeId)
 		return &csi.DeleteVolumeResponse{}, nil
 	}
@@ -183,7 +193,11 @@ func (c *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVolu
 			return nil, status.Errorf(codes.Internal, "get storage class for volume %s: %v", req.VolumeId, err)
 		}
 		opts := getDeleteVolumeSubpathOptions(pv, sc)
-		if err := deleteNFSSubpath(opts.Server, opts.Path, opts.Vers, deleteVolumeRoot, req.GetVolumeId(), opts.ArchiveOnDelete); err != nil {
+		basePath, subDir, err := splitDynamicVolumePath(opts.Path)
+		if err != nil {
+			return nil, status.Errorf(codes.FailedPrecondition, "invalid NFS volume path for volume %s: %v", req.VolumeId, err)
+		}
+		if err := deleteNFSSubpath(opts.Server, basePath, subDir, opts.Vers, deleteVolumeRoot, opts.ArchiveOnDelete); err != nil {
 			utils.SentrySendError(fmt.Errorf("DeleteVolume:: nas, delete NFS subpath: %s", err))
 			return nil, status.Errorf(codes.Aborted, "delete NFS subpath for volume %s: %v", req.VolumeId, err)
 		}
@@ -214,27 +228,99 @@ func (c ControllerServer) ControllerExpandVolume(context.Context, *csi.Controlle
 }
 
 func encodeNasDynamicVolumeID(ref nasDynamicVolumeRef) (string, error) {
-	data, err := json.Marshal(ref)
-	if err != nil {
+	if err := validateNasDynamicVolumeRef(ref); err != nil {
 		return "", err
 	}
-	return nasDynamicVolumePrefix + base64.RawURLEncoding.EncodeToString(data), nil
+
+	var payload bytes.Buffer
+	for _, value := range []string{ref.Server, ref.BasePath, ref.SubDir, ref.Vers} {
+		if err := writeCompactString(&payload, value); err != nil {
+			return "", err
+		}
+	}
+	if ref.ArchiveOnDelete {
+		payload.WriteByte(1)
+	} else {
+		payload.WriteByte(0)
+	}
+	return nasDynamicVolumeV2Prefix + base64.RawURLEncoding.EncodeToString(payload.Bytes()), nil
 }
 
 func decodeNasDynamicVolumeID(volumeID string) (nasDynamicVolumeRef, bool, error) {
 	if !strings.HasPrefix(volumeID, nasDynamicVolumePrefix) {
 		return nasDynamicVolumeRef{}, false, nil
 	}
-	data, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(volumeID, nasDynamicVolumePrefix))
+	if !strings.HasPrefix(volumeID, nasDynamicVolumeV2Prefix) {
+		return nasDynamicVolumeRef{}, true, fmt.Errorf("legacy dynamic NAS volume IDs are not supported; recreate the PVC/PV")
+	}
+	payload := strings.TrimPrefix(volumeID, nasDynamicVolumeV2Prefix)
+	if payload == "" {
+		return nasDynamicVolumeRef{}, true, fmt.Errorf("empty V2 dynamic NAS volume ID")
+	}
+	data, err := base64.RawURLEncoding.DecodeString(payload)
 	if err != nil {
-		return nasDynamicVolumeRef{}, true, fmt.Errorf("invalid dynamic NAS volume ID: %w", err)
+		return nasDynamicVolumeRef{}, true, fmt.Errorf("invalid V2 dynamic NAS volume ID: %w", err)
 	}
-	ref := nasDynamicVolumeRef{}
-	if err := json.Unmarshal(data, &ref); err != nil {
-		return nasDynamicVolumeRef{}, true, fmt.Errorf("invalid dynamic NAS volume ID: %w", err)
+	reader := bytes.NewReader(data)
+	values := make([]string, 4)
+	for i := range values {
+		values[i], err = readCompactString(reader)
+		if err != nil {
+			return nasDynamicVolumeRef{}, true, fmt.Errorf("invalid V2 dynamic NAS volume ID: %w", err)
+		}
 	}
-	if ref.Server == "" || ref.Path == "" {
-		return nasDynamicVolumeRef{}, true, fmt.Errorf("incomplete dynamic NAS volume ID")
+	archiveFlag, err := reader.ReadByte()
+	if err != nil {
+		return nasDynamicVolumeRef{}, true, fmt.Errorf("invalid V2 dynamic NAS volume ID: missing archive flag")
+	}
+	if archiveFlag > 1 || reader.Len() != 0 {
+		return nasDynamicVolumeRef{}, true, fmt.Errorf("invalid V2 dynamic NAS volume ID payload")
+	}
+	ref := nasDynamicVolumeRef{
+		Server:          values[0],
+		BasePath:        values[1],
+		SubDir:          values[2],
+		Vers:            values[3],
+		ArchiveOnDelete: archiveFlag == 1,
+	}
+	if err := validateNasDynamicVolumeRef(ref); err != nil {
+		return nasDynamicVolumeRef{}, true, fmt.Errorf("invalid V2 dynamic NAS volume ID: %w", err)
 	}
 	return ref, true, nil
+}
+
+func validateNasDynamicVolumeRef(ref nasDynamicVolumeRef) error {
+	if !nfsServerPattern.MatchString(ref.Server) {
+		return fmt.Errorf("invalid NFS server %q", ref.Server)
+	}
+	if _, err := resolveDynamicVolumePath(ref.BasePath, ref.SubDir); err != nil {
+		return err
+	}
+	if ref.Vers != "3" && ref.Vers != "4.0" && ref.Vers != "4.1" {
+		return fmt.Errorf("unsupported NFS version %q", ref.Vers)
+	}
+	return nil
+}
+
+func writeCompactString(writer io.Writer, value string) error {
+	if len(value) > int(^uint16(0)) {
+		return fmt.Errorf("NAS volume ID field is too long")
+	}
+	if err := binary.Write(writer, binary.BigEndian, uint16(len(value))); err != nil {
+		return err
+	}
+	_, err := io.WriteString(writer, value)
+	return err
+}
+
+func readCompactString(reader *bytes.Reader) (string, error) {
+	var length uint16
+	if err := binary.Read(reader, binary.BigEndian, &length); err != nil {
+		return "", err
+	}
+	value := make([]byte, int(length))
+	if _, err := io.ReadFull(reader, value); err != nil {
+		return "", err
+	}
+	return string(value), nil
 }

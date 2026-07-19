@@ -52,7 +52,8 @@ type PublishOptions struct {
 
 type VolumeCreateSubpathOptions struct {
 	NfsOpts
-	VolumeAs string
+	VolumeAs        string
+	ArchiveOnDelete bool
 }
 
 type DeleteVolumeSubpathOptions struct {
@@ -63,7 +64,9 @@ type DeleteVolumeSubpathOptions struct {
 }
 
 type nasDynamicVolumeRef struct {
-	Server string `json:"server"`
-	Path   string `json:"path"`
-	Vers   string `json:"vers"`
+	Server          string
+	BasePath        string
+	SubDir          string
+	Vers            string
+	ArchiveOnDelete bool
 }

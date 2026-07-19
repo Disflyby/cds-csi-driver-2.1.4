@@ -30,6 +30,51 @@ func validateVolumeID(volumeID string) error {
 	return nil
 }
 
+func validateDynamicSubDir(subDir string) error {
+	if subDir == "" || subDir == "." || strings.Contains(subDir, "..") || strings.ContainsAny(subDir, "/\\\x00\r\n") {
+		return fmt.Errorf("invalid dynamic NFS subdirectory %q: must be a single directory name", subDir)
+	}
+	if filepath.Clean(subDir) != subDir || filepath.Base(subDir) != subDir {
+		return fmt.Errorf("invalid dynamic NFS subdirectory %q: must be a single directory name", subDir)
+	}
+	return nil
+}
+
+func resolveDynamicVolumePath(basePath, subDir string) (string, error) {
+	if err := validateNFSPath(basePath, "base path"); err != nil {
+		return "", err
+	}
+	if err := validateDynamicSubDir(subDir); err != nil {
+		return "", err
+	}
+	cleanBasePath := filepath.Clean(basePath)
+	volumePath := filepath.Join(cleanBasePath, subDir)
+	if volumePath == cleanBasePath {
+		return "", fmt.Errorf("dynamic NFS volume path cannot equal its base path")
+	}
+	relativePath, err := filepath.Rel(cleanBasePath, volumePath)
+	if err != nil || relativePath == "." || filepath.IsAbs(relativePath) || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("dynamic NFS volume path %q escapes base path %q", volumePath, cleanBasePath)
+	}
+	return volumePath, nil
+}
+
+func splitDynamicVolumePath(volumePath string) (string, string, error) {
+	if err := validateNFSPath(volumePath, "volume path"); err != nil {
+		return "", "", err
+	}
+	cleanVolumePath := filepath.Clean(volumePath)
+	if cleanVolumePath == string(filepath.Separator) {
+		return "", "", fmt.Errorf("volume path cannot be the export root")
+	}
+	basePath := filepath.Dir(cleanVolumePath)
+	subDir := filepath.Base(cleanVolumePath)
+	if _, err := resolveDynamicVolumePath(basePath, subDir); err != nil {
+		return "", "", err
+	}
+	return basePath, subDir, nil
+}
+
 func validateNFSInput(server, remotePath, targetPath, vers, options string) error {
 	if !nfsServerPattern.MatchString(server) {
 		return fmt.Errorf("invalid NFS server %q", server)
@@ -205,20 +250,14 @@ func selectDeterministicNfsServer(servers []*NfsServer, volumeID string) *NfsSer
 	return servers[int(hash.Sum32()%uint32(len(servers)))]
 }
 
-func deleteNFSSubpath(server, pvPath, vers, mountRoot, volumeID string, archiveOnDelete bool) (retErr error) {
-	if err := validateVolumeID(volumeID); err != nil {
+func deleteNFSSubpath(server, basePath, subDir, vers, mountRoot string, archiveOnDelete bool) (retErr error) {
+	if _, err := resolveDynamicVolumePath(basePath, subDir); err != nil {
 		return err
-	}
-	if err := validateNFSPath(pvPath, "volume path"); err != nil || pvPath == "/" {
-		if err != nil {
-			return err
-		}
-		return fmt.Errorf("volume path cannot be /")
 	}
 	if vers == "" {
 		vers = defaultNfsVersion
 	}
-	mountPoint := filepath.Join(mountRoot, volumeID+"-delete")
+	mountPoint := filepath.Join(mountRoot, subDir+"-delete")
 	mounted, err := isMountPoint(mountPoint)
 	if err != nil {
 		return err
@@ -241,17 +280,24 @@ func deleteNFSSubpath(server, pvPath, vers, mountRoot, volumeID string, archiveO
 		removeMountPoint(mountPoint)
 	}()
 
-	if err := mountNFS(server, getNasPathFromPvPath(pvPath), mountPoint, vers, "", false); err != nil {
+	if err := mountNFS(server, basePath, mountPoint, vers, "", false); err != nil {
 		return err
 	}
-	deletePath := filepath.Join(mountPoint, filepath.Base(pvPath))
+	deletePath := filepath.Join(mountPoint, subDir)
 	if _, err := os.Lstat(deletePath); os.IsNotExist(err) {
 		return nil
 	} else if err != nil {
 		return fmt.Errorf("stat NFS path %s: %w", deletePath, err)
 	}
+	markerMatches, err := volumeMarkerExists(deletePath, subDir)
+	if err != nil {
+		return err
+	}
+	if !markerMatches {
+		return fmt.Errorf("refusing to remove NFS path %s: volume marker is missing", deletePath)
+	}
 	if archiveOnDelete {
-		archivePath := filepath.Join(mountPoint, "archived-"+filepath.Base(pvPath)+time.Now().Format(".2006-01-02-15:04:05"))
+		archivePath := filepath.Join(mountPoint, "archived-"+subDir+time.Now().Format(".2006-01-02-15-04-05"))
 		if err := os.Rename(deletePath, archivePath); err != nil {
 			return fmt.Errorf("archive NFS path %s to %s: %w", deletePath, archivePath, err)
 		}

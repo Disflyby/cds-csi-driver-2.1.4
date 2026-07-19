@@ -226,6 +226,13 @@ func newVolumeCreateSubpathOptions(param map[string]string) *VolumeCreateSubpath
 func parseVolumeCreateSubpathOptions(req *csi.CreateVolumeRequest) (*VolumeCreateSubpathOptions, error) {
 
 	opts := newVolumeCreateSubpathOptions(req.GetParameters())
+	if archiveValue, ok := req.GetParameters()["archiveOnDelete"]; ok {
+		archiveOnDelete, err := strconv.ParseBool(archiveValue)
+		if err != nil {
+			return nil, fmt.Errorf("invalid archiveOnDelete value %q: %w", archiveValue, err)
+		}
+		opts.ArchiveOnDelete = archiveOnDelete
+	}
 
 	if opts.Server == "" && opts.Servers == "" {
 		return nil, fmt.Errorf("nas, fatel error, server or servers is missing on volume as subpath")
@@ -277,9 +284,7 @@ func mountNasVolume(opts *PublishOptions, volumeId string) error {
 	if opts.VolumeAs == subpathLiteral {
 		if opts.AllowSharePath {
 			serverMountPoint = opts.Path
-		} else if opts.DynamicSubpath || filepath.Base(filepath.Clean(opts.Path)) == volumeId {
-			// New dynamic PVs carry an explicit marker. The exact basename fallback
-			// keeps already-provisioned dynamic PVs mountable after an upgrade.
+		} else if opts.DynamicSubpath {
 			serverMountPoint = opts.Path
 		} else {
 			serverMountPoint = filepath.Join(opts.Path, volumeId)
@@ -320,6 +325,9 @@ func (opts *NfsOpts) createNasSubDir(mountRoot, subDir string) error {
 }
 
 func (opts *NfsOpts) createDynamicNasSubDir(mountRoot, volumeID string) error {
+	if _, err := resolveDynamicVolumePath(opts.Path, volumeID); err != nil {
+		return err
+	}
 	return opts.createNasSubDirWithMarker(mountRoot, volumeID, volumeID)
 }
 
@@ -329,15 +337,6 @@ func (opts *NfsOpts) createNasSubDirWithMarker(mountRoot, subDir, volumeID strin
 	localMountPath := filepath.Join(mountRoot, subDir)
 	fullPath := filepath.Join(localMountPath, subDir)
 
-	// Skip creation if the volume marker already exists. This makes dynamic
-	// provisioning idempotent across controller restarts.
-	if volumeID != "" {
-		exists, markErr := volumeMarkerExists(fullPath, volumeID)
-		if markErr == nil && exists {
-			log.Infof("nas subpath marker already exists, skipping creation: %s", fullPath)
-			return nil
-		}
-	}
 	mounted, err := isMountPoint(localMountPath)
 	if err != nil {
 		return err
@@ -363,13 +362,25 @@ func (opts *NfsOpts) createNasSubDirWithMarker(mountRoot, subDir, volumeID strin
 	if err := mountNFS(opts.Server, opts.Path, localMountPath, opts.Vers, opts.Options, false); err != nil {
 		return err
 	}
-	if err := utils.CreateDir(fullPath, mountPointMode); err != nil {
-		return fmt.Errorf("nas, create sub directory: %w", err)
-	}
 	if volumeID != "" {
+		if _, err := os.Lstat(fullPath); err == nil {
+			markerMatches, err := volumeMarkerExists(fullPath, volumeID)
+			if err != nil {
+				return err
+			}
+			if !markerMatches {
+				return fmt.Errorf("refusing to claim existing NFS path %s: volume marker is missing", fullPath)
+			}
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("stat NFS subdirectory %s: %w", fullPath, err)
+		} else if err := utils.CreateDir(fullPath, mountPointMode); err != nil {
+			return fmt.Errorf("nas, create sub directory: %w", err)
+		}
 		if err := ensureVolumeMarker(fullPath, volumeID); err != nil {
 			return err
 		}
+	} else if err := utils.CreateDir(fullPath, mountPointMode); err != nil {
+		return fmt.Errorf("nas, create sub directory: %w", err)
 	}
 	if err := os.Chmod(fullPath, mountPointMode); err != nil {
 		return fmt.Errorf("change mode for %s: %w", fullPath, err)
@@ -418,19 +429,6 @@ func changeNasMode(opts *PublishOptions) error {
 		return fmt.Errorf("change mode for %s: %w", opts.NodePublishPath, err)
 	}
 	return nil
-}
-
-func getNasPathFromPvPath(pvPath string) (nasPath string) {
-	tmpPath := pvPath
-	if strings.HasSuffix(pvPath, "/") {
-		tmpPath = pvPath[0 : len(pvPath)-1]
-	}
-	pos := strings.LastIndex(tmpPath, "/")
-	nasPath = pvPath[0:pos]
-	if nasPath == "" {
-		nasPath = "/"
-	}
-	return
 }
 
 func getDeleteVolumeSubpathOptions(pv *core.PersistentVolume, sc *storage.StorageClass) *DeleteVolumeSubpathOptions {
